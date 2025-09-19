@@ -32,6 +32,31 @@ import psutil
 from collections import OrderedDict
 import io
 from urllib.parse import urlencode
+from .connect_host import get_tunnel_url, get_tunnel_instance
+
+
+@server.PromptServer.instance.routes.get("/tunnel/status")
+async def tunnel_status_endpoint(request):
+    """
+    Get the current tunnel status and URL
+    """
+    try:
+        tunnel_url = get_tunnel_url()
+        tunnel = get_tunnel_instance()
+
+        return web.json_response(
+            {
+                "success": True,
+                "url": tunnel_url,
+                "running": tunnel.is_tunnel_running() if tunnel else False,
+                "port": tunnel.port if tunnel else None,
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error getting tunnel status: {e}")
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
 
 # Global session
 client_session = None

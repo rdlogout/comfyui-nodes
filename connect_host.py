@@ -199,3 +199,33 @@ def stop_tunnel():
     global _tunnel_instance
     if _tunnel_instance:
         _tunnel_instance.stop_tunnel()
+
+
+def on_tunnel_url_ready(url):
+    """Callback function called when tunnel URL is ready"""
+    print(f"\n🌐 ComfyUI is now accessible via Cloudflare tunnel:")
+    print(f"🔗 {url}")
+    print(f"📡 Tunnel status available at: /tunnel/status\n")
+
+
+def start_tunnel_background():
+    """Start the tunnel in background thread"""
+    try:
+        # Start tunnel with callback to print URL
+        tunnel = start_tunnel_for_comfyui(port=8188, on_url_ready=on_tunnel_url_ready)
+        logger.info("Cloudflare tunnel started in background")
+    except Exception as e:
+        logger.error(f"Failed to start Cloudflare tunnel: {e}")
+        print(f"[CloudflareTunnel] Failed to start tunnel: {e}")
+
+
+# Start tunnel in background thread after a short delay
+def delayed_tunnel_start():
+    time.sleep(5)  # Wait for ComfyUI to fully initialize
+    start_tunnel_background()
+
+
+def init_tunnel():
+    tunnel_thread = threading.Thread(target=delayed_tunnel_start, daemon=True)
+    tunnel_thread.start()
+    print("[CloudflareTunnel] Starting tunnel in background...")
