@@ -3659,19 +3659,20 @@ async def upload_part_from_path(request):
 
 
 # Import the new modules
-from .connect_host import CloudflareTunnel, start_cloudflare_tunnel, stop_cloudflare_tunnel
+from .connect_host import CloudflareTunnel, start_tunnel_for_comfyui, stop_tunnel, get_tunnel_url, get_tunnel_instance
 from .workflow_converter import WorkflowConverter, convert_workflow_to_api
 
 
 # Cloudflare Tunnel Routes
 @server.PromptServer.instance.routes.post("/comfyui-deploy/tunnel/start")
-async def start_tunnel(request):
+async def start_tunnel_route(request):
     """Start Cloudflare tunnel"""
     try:
         data = await request.json()
         port = data.get("port", 8188)
         
-        result = await start_cloudflare_tunnel(port)
+        tunnel = start_tunnel_for_comfyui(port)
+        result = {"success": True, "url": tunnel.get_tunnel_url()}
         
         if result["success"]:
             return web.json_response({
@@ -3695,13 +3696,11 @@ async def start_tunnel(request):
 
 
 @server.PromptServer.instance.routes.post("/comfyui-deploy/tunnel/stop")
-async def stop_tunnel(request):
+async def stop_tunnel_route(request):
     """Stop Cloudflare tunnel"""
     try:
-        data = await request.json()
-        tunnel_id = data.get("tunnel_id")
-        
-        result = await stop_cloudflare_tunnel(tunnel_id)
+        stop_tunnel()
+        result = {"success": True}
         
         if result["success"]:
             return web.json_response({
@@ -3727,13 +3726,12 @@ async def tunnel_status(request):
     """Get tunnel status"""
     try:
         # Check if tunnel is running by checking the global tunnel instance
-        tunnel = CloudflareTunnel.get_instance()
-        if tunnel and tunnel.is_running():
+        tunnel = get_tunnel_instance()
+        if tunnel and tunnel.is_tunnel_running():
             return web.json_response({
                 "success": True,
                 "running": True,
-                "url": tunnel.get_url(),
-                "tunnel_id": tunnel.get_tunnel_id()
+                "url": tunnel.get_tunnel_url()
             })
         else:
             return web.json_response({
