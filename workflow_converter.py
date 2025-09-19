@@ -418,192 +418,89 @@ class WorkflowConverter:
     @staticmethod
     def _filter_control_values(widget_values: List[Any]) -> List[Any]:
         """Filter out control_after_generate values from widget list"""
-        filtered = []
-        skip_next = False
+        # control_after_generate values are typically strings like "fixed", "increment", "decrement", "randomize"
+        # These are UI controls and not actual input values
+        control_values = {"fixed", "increment", "decrement", "randomize"}
         
-        for i, value in enumerate(widget_values):
-            if skip_next:
-                skip_next = False
+        filtered = []
+        for value in widget_values:
+            if isinstance(value, str) and value in control_values:
+                # Skip control values
                 continue
-                
-            # Check if this is a control value that should be skipped
-            if value in ['fixed', 'increment', 'decrement', 'randomize']:
-                # This is a control_after_generate value, skip it
-                continue
-            
-            # Check if this value is followed by a control value
-            if i + 1 < len(widget_values):
-                next_val = widget_values[i + 1]
-                if next_val in ['fixed', 'increment', 'decrement', 'randomize']:
-                    # This widget has a control value after it
-                    filtered.append(value)
-                    # The control value will be skipped in the next iteration
-                    continue
-            
             filtered.append(value)
         
         return filtered
     
     @staticmethod
-    def _get_ordered_inputs(node_type: str, node: Dict[str, Any]) -> List[str]:
+    def _get_widget_mappings(node_type: str, node: Dict[str, Any]) -> Optional[List[str]]:
         """
-        Get the ordered list of all inputs (both widgets and connections) for a node type.
-        Returns the inputs in the order they should appear in the API format.
+        Get the widget name mappings for a node type.
+        Returns a list of widget names in the order they appear in widgets_values.
         """
-        # Try to get input order from node properties first
-        properties = node.get('properties', {})
-        if 'Node name for S&R' in properties:
-            # Sometimes the actual node class name is stored here
-            node_type = properties['Node name for S&R']
-        
-        # Try to get from cached node info first
         node_info = get_node_info_for_type(node_type)
-        if node_info and 'input_order' in node_info:
-            input_order = node_info['input_order']
-            input_names = []
-            for section in ['required', 'optional']:
-                if section in input_order:
-                    input_names.extend(input_order[section])
-            if input_names:
-                return input_names
+        if not node_info:
+            return None
         
-        # Fallback: Get input order from actual node class if it's loaded
-        if hasattr(nodes, 'NODE_CLASS_MAPPINGS') and node_type in nodes.NODE_CLASS_MAPPINGS:
-            try:
-                node_class = nodes.NODE_CLASS_MAPPINGS[node_type]
-                input_types = node_class.INPUT_TYPES()
-                
-                # Build ordered list of all input names
-                input_names = []
-                
-                # Process required inputs first, then optional
-                for section in ['required', 'optional']:
-                    if section in input_types:
-                        for input_name in input_types[section].keys():
-                            input_names.append(input_name)
-                
-                if input_names:
-                    return input_names
-            except Exception as e:
-                logger.debug(f"Could not get input order from node class for {node_type}: {e}")
+        # Get the input types and their order
+        input_types = node_info.get('input', {})
+        required_inputs = input_types.get('required', {})
+        optional_inputs = input_types.get('optional', {})
         
-        # For unknown nodes, return empty list (will use fallback ordering)
-        return []
+        # Build list of widget names (inputs that aren't connections)
+        widget_names = []
+        
+        # Add required inputs that are widgets (not connections)
+        for input_name, input_config in required_inputs.items():
+            # Check if this input is connected via a link
+            is_connected = False
+            node_inputs = node.get('inputs', [])
+            for input_info in node_inputs:
+                if input_info.get('name') == input_name and input_info.get('link') is not None:
+                    is_connected = True
+                    break
+            
+            # If not connected, it's a widget
+            if not is_connected:
+                widget_names.append(input_name)
+        
+        # Add optional inputs that are widgets
+        for input_name, input_config in optional_inputs.items():
+            # Check if this input is connected via a link
+            is_connected = False
+            node_inputs = node.get('inputs', [])
+            for input_info in node_inputs:
+                if input_info.get('name') == input_name and input_info.get('link') is not None:
+                    is_connected = True
+                    break
+            
+            # If not connected, it's a widget
+            if not is_connected:
+                widget_names.append(input_name)
+        
+        return widget_names
     
     @staticmethod
-    def _get_widget_mappings(node_type: str, node: Dict[str, Any]) -> List[Optional[str]]:
+    def _get_ordered_inputs(node_type: str, node: Dict[str, Any]) -> Optional[List[str]]:
         """
-        Get widget name mappings for a given node type.
-        Returns a list of widget names in the order they appear.
-        
-        This is used to map the widget_values list to actual input names.
+        Get the ordered list of all inputs for a node type.
+        This includes both widget inputs and connection inputs.
         """
-        # Try to get widget order from node properties first
-        properties = node.get('properties', {})
-        if 'Node name for S&R' in properties:
-            # Sometimes the actual node class name is stored here
-            node_type = properties['Node name for S&R']
-        
-        # Try to get from cached node info first
         node_info = get_node_info_for_type(node_type)
-        if node_info and 'input' in node_info:
-            try:
-                input_def = node_info['input']
-                widget_names = []
-                
-                # Process required inputs first, then optional
-                for section in ['required', 'optional']:
-                    if section in input_def:
-                        for input_name, input_spec in input_def[section].items():
-                            # Check if this is a widget input (not a node connection)
-                            if isinstance(input_spec, (list, tuple)) and len(input_spec) >= 1:
-                                input_type = input_spec[0]
-                                # Check if it's a widget type
-                                if isinstance(input_type, list):
-                                    # This is a combo box widget (list of choices)
-                                    widget_names.append(input_name)
-                                elif input_type in ['INT', 'FLOAT', 'STRING', 'BOOLEAN']:
-                                    # Basic widget types
-                                    widget_names.append(input_name)
-                                elif isinstance(input_type, str) and not input_type.isupper():
-                                    # Custom widget types (lowercase)
-                                    widget_names.append(input_name)
-                                # Skip connection types (MODEL, LATENT, CONDITIONING, etc.)
-                
-                if widget_names:
-                    return widget_names
-            except Exception as e:
-                logger.debug(f"Could not get widget mappings from node info for {node_type}: {e}")
+        if not node_info:
+            return None
         
-        # Fallback: Get widget order from actual node class if it's loaded
-        if hasattr(nodes, 'NODE_CLASS_MAPPINGS') and node_type in nodes.NODE_CLASS_MAPPINGS:
-            try:
-                node_class = nodes.NODE_CLASS_MAPPINGS[node_type]
-                input_types = node_class.INPUT_TYPES()
-                
-                # Build ordered list of widget names (non-connection inputs)
-                widget_names = []
-                
-                # Process required inputs first, then optional
-                for section in ['required', 'optional']:
-                    if section in input_types:
-                        for input_name, input_spec in input_types[section].items():
-                            # Check if this is a widget input (not a node connection)
-                            if isinstance(input_spec, tuple) and len(input_spec) >= 1:
-                                input_type = input_spec[0]
-                                # Check if it's a widget type
-                                if isinstance(input_type, list):
-                                    # This is a combo box widget (list of choices)
-                                    widget_names.append(input_name)
-                                elif input_type in ['INT', 'FLOAT', 'STRING', 'BOOLEAN']:
-                                    # Basic widget types
-                                    widget_names.append(input_name)
-                                elif isinstance(input_type, str) and not input_type.isupper():
-                                    # Custom widget types (lowercase)
-                                    widget_names.append(input_name)
-                                # Skip connection types (MODEL, LATENT, CONDITIONING, etc.)
-                
-                if widget_names:
-                    return widget_names
-            except Exception as e:
-                logger.debug(f"Could not get widget mappings from node class for {node_type}: {e}")
+        # Get the input types and their order
+        input_types = node_info.get('input', {})
+        required_inputs = input_types.get('required', {})
+        optional_inputs = input_types.get('optional', {})
         
-        # Fallback: Try to infer widget mappings from the workflow and widget values
-        widget_values = node.get('widgets_values', [])
-        if not isinstance(widget_values, list) or len(widget_values) == 0:
-            return []
+        # Build ordered list of all input names
+        ordered_inputs = []
         
-        # Get all inputs from the node
-        all_inputs = []
-        connected_inputs = set()
-        widget_flagged_inputs = []
+        # Add required inputs first
+        ordered_inputs.extend(required_inputs.keys())
         
-        for input_info in node.get('inputs', []):
-            input_name = input_info.get('name')
-            if input_name:
-                all_inputs.append(input_name)
-                if input_info.get('link') is not None:
-                    connected_inputs.add(input_name)
-                if input_info.get('widget'):
-                    widget_flagged_inputs.append(input_name)
+        # Add optional inputs
+        ordered_inputs.extend(optional_inputs.keys())
         
-        # If we have widget-flagged inputs, start with those
-        if widget_flagged_inputs:
-            # But we might have more widget values than flagged inputs
-            # This happens with nodes like WanImageToVideo where not all widgets are flagged
-            if len(widget_values) > len(widget_flagged_inputs):
-                # We need to find the additional widget inputs
-                # They should be the non-connected inputs that aren't flagged
-                potential_widgets = [inp for inp in all_inputs 
-                                   if inp not in connected_inputs and inp not in widget_flagged_inputs]
-                # Combine them in order
-                return widget_flagged_inputs + potential_widgets[:len(widget_values) - len(widget_flagged_inputs)]
-            return widget_flagged_inputs
-        
-        # No flagged widgets, try to guess based on which inputs aren't connected
-        unconnected = [inp for inp in all_inputs if inp not in connected_inputs]
-        if unconnected and len(unconnected) >= len(widget_values):
-            return unconnected[:len(widget_values)]
-        
-        # If we still can't determine mappings, return empty
-        return []
+        return ordered_inputs
