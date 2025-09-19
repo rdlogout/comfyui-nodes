@@ -504,3 +504,17 @@ class WorkflowConverter:
         ordered_inputs.extend(optional_inputs.keys())
         
         return ordered_inputs
+
+
+# Convenience function for direct usage
+def convert_workflow_to_api(workflow: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convenience function to convert a workflow to API format.
+    
+    Args:
+        workflow: The workflow dictionary to convert
+        
+    Returns:
+        Dict containing the converted API format workflow
+    """
+    return WorkflowConverter.convert_to_api(workflow)
