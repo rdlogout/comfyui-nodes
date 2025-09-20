@@ -19,11 +19,19 @@ download_lock = threading.Lock()
 class ModelDownloader:
     def __init__(self, url: str, path: str, comfyui_path: str):
         self.url = url
-        self.path = path
+        # Ensure path is relative by removing leading slashes
+        self.path = path.lstrip('/')
         self.comfyui_path = comfyui_path
-        self.full_path = os.path.join(comfyui_path, path)
+        self.full_path = os.path.join(comfyui_path, self.path)
         self.tmp_path = self.full_path + ".tmp"
-        self.task_id = f"{url}:{path}"
+        self.task_id = f"{url}:{self.path}"
+        
+        logger.info(f"ModelDownloader initialized:")
+        logger.info(f"  Original path: {path}")
+        logger.info(f"  Cleaned path: {self.path}")
+        logger.info(f"  ComfyUI path: {comfyui_path}")
+        logger.info(f"  Full path: {self.full_path}")
+        logger.info(f"  Tmp path: {self.tmp_path}")
         
     async def download_with_progress(self):
         """Download file with progress tracking and resume capability"""
@@ -148,10 +156,13 @@ def register_model_downloader_routes():
             home_path = os.path.expanduser("~")
             comfyui_path = os.path.join(home_path, "ComfyUI")
             
+            logger.info(f"ComfyUI path: {comfyui_path}")
+            logger.info(f"Requested path: {path}")
+            
             if not os.path.isdir(comfyui_path):
                 return web.json_response({
                     'success': False,
-                    'error': 'ComfyUI directory not found'
+                    'error': f'ComfyUI directory not found at {comfyui_path}'
                 }, status=500)
             
             task_id = f"{url}:{path}"
