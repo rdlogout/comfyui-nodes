@@ -36,17 +36,46 @@ class ModelDownloader:
     async def download_with_progress(self):
         """Download file with progress tracking and resume capability"""
         try:
-            # Check if file already exists
+            # Initialize task in download_tasks
+            with download_lock:
+                download_tasks[self.task_id] = {
+                    'progress': 0,
+                    'status': 'starting',
+                    'url': self.url,
+                    'path': self.path,
+                    'message': 'Checking file status...',
+                    'downloaded': 0,
+                    'total': 0
+                }
+            
+            # Check if file already exists and is complete
             if os.path.exists(self.full_path):
-                with download_lock:
-                    download_tasks[self.task_id] = {
-                        'progress': 100,
-                        'status': 'completed',
-                        'url': self.url,
-                        'path': self.path,
-                        'message': 'File already exists'
-                    }
-                return
+                # Get file size from server to verify completeness
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.head(self.url) as response:
+                            if response.status == 200:
+                                expected_size = int(response.headers.get('Content-Length', 0))
+                                actual_size = os.path.getsize(self.full_path)
+                                
+                                if expected_size > 0 and actual_size == expected_size:
+                                    with download_lock:
+                                        download_tasks[self.task_id] = {
+                                            'progress': 100,
+                                            'status': 'completed',
+                                            'url': self.url,
+                                            'path': self.path,
+                                            'message': 'File already exists and is complete',
+                                            'downloaded': actual_size,
+                                            'total': expected_size
+                                        }
+                                    logger.info(f"File already exists and is complete: {self.full_path}")
+                                    return
+                                else:
+                                    logger.info(f"File exists but size mismatch. Expected: {expected_size}, Actual: {actual_size}")
+                except Exception as e:
+                    logger.warning(f"Could not verify file size from server: {e}")
+                    # If we can't verify, assume file might be incomplete and re-download
 
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(self.full_path), exist_ok=True)
@@ -79,17 +108,15 @@ class ModelDownloader:
                     
                     downloaded = resume_pos
                     
-                    # Initialize progress tracking
+                    # Update progress tracking with download info
                     with download_lock:
-                        download_tasks[self.task_id] = {
-                            'progress': 0 if total_size > 0 else -1,
+                        download_tasks[self.task_id].update({
+                            'progress': int((downloaded / total_size) * 100) if total_size > 0 else 0,
                             'status': 'downloading',
-                            'url': self.url,
-                            'path': self.path,
                             'downloaded': downloaded,
                             'total': total_size,
-                            'message': 'Downloading...'
-                        }
+                            'message': 'Starting download...'
+                        })
                     
                     # Open file in append mode for resume
                     mode = 'ab' if resume_pos > 0 else 'wb'
@@ -165,7 +192,9 @@ def register_model_downloader_routes():
                     'error': f'ComfyUI directory not found at {comfyui_path}'
                 }, status=500)
             
-            task_id = f"{url}:{path}"
+            # Create downloader to get the correct task_id (with cleaned path)
+            downloader = ModelDownloader(url, path, comfyui_path)
+            task_id = downloader.task_id
             
             # Check if task already exists
             with download_lock:
@@ -178,9 +207,6 @@ def register_model_downloader_routes():
                         'status': existing_task['status'],
                         'message': existing_task['message']
                     })
-            
-            # Start new download task
-            downloader = ModelDownloader(url, path, comfyui_path)
             
             # Run download in background
             asyncio.create_task(downloader.download_with_progress())
