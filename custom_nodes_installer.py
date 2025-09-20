@@ -4,7 +4,7 @@ import json
 import logging
 from aiohttp import web
 from server import PromptServer
-from helper.request_function import get_data, post_data
+from .helper.request_function import get_data, post_data
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
