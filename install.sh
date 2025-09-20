@@ -152,4 +152,4 @@ main() {
 main "$@"
 
 #start comfyui now
-cd $COMFY_DIR && python main.py
+cd $HOME/ComfyUI && source venv/bin/activate && python main.py --listen --enable-cors-header

@@ -12,6 +12,7 @@ import os
 import signal
 import atexit
 from typing import Optional, Callable
+from helper.request_function import post_data
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -178,9 +179,13 @@ def init_tunnel(port: int = 8188, on_url_ready: Optional[Callable[[str], None]] 
     Returns:
         CloudflareTunnel: The tunnel instance
     """
+    def on_url_ready_wrapper(url):
+        post_data("api/machines/connect", {"endpoint": url})
+        if on_url_ready:
+            on_url_ready(url)
+
     tunnel = get_tunnel_instance(port)
-    if on_url_ready:
-        tunnel.on_url_ready = on_url_ready
+    tunnel.on_url_ready = on_url_ready_wrapper
     
     if not tunnel.is_tunnel_running():
         tunnel.start_tunnel()
