@@ -5,7 +5,7 @@
 # ComfyUI Nodes Installation Script
 # This script will install or update the comfyui-nodes repository in ComfyUI's custom_nodes directory
 
-set -e  # Exit on any error
+# set -e  # Exit on any error
 
 # Configuration
 REPO_URL="https://github.com/rdlogout/comfyui-nodes"

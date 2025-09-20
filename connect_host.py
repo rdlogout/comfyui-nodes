@@ -167,7 +167,7 @@ def get_tunnel_instance(port: int = 8188) -> CloudflareTunnel:
         _tunnel_instance = CloudflareTunnel(port=port)
     return _tunnel_instance
 
-def start_tunnel_for_comfyui(port: int = 8188, on_url_ready: Optional[Callable[[str], None]] = None) -> CloudflareTunnel:
+def init_tunnel(port: int = 8188, on_url_ready: Optional[Callable[[str], None]] = None) -> CloudflareTunnel:
     """
     Start a Cloudflare tunnel for ComfyUI
     
