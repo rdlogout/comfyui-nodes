@@ -376,33 +376,6 @@ class WorkflowConverter:
             api_prompt[node_id] = api_node
         
         return api_prompt
-
-from aiohttp import web
-from server import PromptServer
-import traceback
-
-def register_workflow_routes():
-    @PromptServer.instance.routes.post('/workflow/convert')
-    async def convert_workflow_endpoint(request):
-        try:
-            json_data = await request.json()
-            if WorkflowConverter.is_api_format(json_data):
-                return web.json_response(json_data, dumps=lambda x: json.dumps(x, ensure_ascii=False, indent=2))
-            
-            if 'nodes' in json_data and 'links' in json_data:
-                api_format = WorkflowConverter.convert_to_api(json_data)
-                return web.json_response(api_format, dumps=lambda x: json.dumps(x, ensure_ascii=False, indent=2))
-            else:
-                return web.json_response({"error": "Invalid workflow format - missing nodes or links"}, status=400)
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON in request: {e}")
-            return web.json_response({'success': False, 'error': f'Invalid JSON: {str(e)}'}, status=400)
-        except Exception as e:
-            error_msg = f"Error converting workflow: {str(e)}"
-            logger.error(error_msg)
-            logger.error(f"Traceback: {traceback.format_exc()}")
-            return web.json_response({"success": False, "error": str(e), "details": traceback.format_exc()}, status=500)
-
     
     @staticmethod
     def _process_dict_widget_values(widget_values: List[Any], widget_inputs: Dict[str, Any], link_inputs: Dict[str, Any]) -> None:
@@ -634,3 +607,29 @@ def register_workflow_routes():
         
         # If we still can't determine mappings, return empty
         return []
+
+from aiohttp import web
+from server import PromptServer
+import traceback
+
+def register_workflow_routes():
+    @PromptServer.instance.routes.post('/workflow/convert')
+    async def convert_workflow_endpoint(request):
+        try:
+            json_data = await request.json()
+            if WorkflowConverter.is_api_format(json_data):
+                return web.json_response(json_data, dumps=lambda x: json.dumps(x, ensure_ascii=False, indent=2))
+            
+            if 'nodes' in json_data and 'links' in json_data:
+                api_format = WorkflowConverter.convert_to_api(json_data)
+                return web.json_response(api_format, dumps=lambda x: json.dumps(x, ensure_ascii=False, indent=2))
+            else:
+                return web.json_response({"error": "Invalid workflow format - missing nodes or links"}, status=400)
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in request: {e}")
+            return web.json_response({'success': False, 'error': f'Invalid JSON: {str(e)}'}, status=400)
+        except Exception as e:
+            error_msg = f"Error converting workflow: {str(e)}"
+            logger.error(error_msg)
+            logger.error(f"Traceback: {traceback.format_exc()}")
+            return web.json_response({"success": False, "error": str(e), "details": traceback.format_exc()}, status=500)
