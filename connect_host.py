@@ -201,31 +201,22 @@ def stop_tunnel():
         _tunnel_instance.stop_tunnel()
 
 
-def on_tunnel_url_ready(url):
-    """Callback function called when tunnel URL is ready"""
-    print(f"\n🌐 ComfyUI is now accessible via Cloudflare tunnel:")
-    print(f"🔗 {url}")
-    print(f"📡 Tunnel status available at: /tunnel/status\n")
+from aiohttp import web
+from server import PromptServer
 
-
-def start_tunnel_background():
-    """Start the tunnel in background thread"""
-    try:
-        # Start tunnel with callback to print URL
-        tunnel = start_tunnel_for_comfyui(port=8188, on_url_ready=on_tunnel_url_ready)
-        logger.info("Cloudflare tunnel started in background")
-    except Exception as e:
-        logger.error(f"Failed to start Cloudflare tunnel: {e}")
-        print(f"[CloudflareTunnel] Failed to start tunnel: {e}")
-
-
-# Start tunnel in background thread after a short delay
-def delayed_tunnel_start():
-    time.sleep(5)  # Wait for ComfyUI to fully initialize
-    start_tunnel_background()
-
-
-def init_tunnel():
-    tunnel_thread = threading.Thread(target=delayed_tunnel_start, daemon=True)
-    tunnel_thread.start()
-    print("[CloudflareTunnel] Starting tunnel in background...")
+def register_tunnel_routes():
+    @PromptServer.instance.routes.get('/tunnel/status')
+    async def tunnel_status_endpoint(request):
+        try:
+            tunnel_url = get_tunnel_url()
+            tunnel = get_tunnel_instance()
+            
+            return web.json_response({
+                'success': True,
+                'url': tunnel_url,
+                'running': tunnel.is_tunnel_running() if tunnel else False,
+                'port': tunnel.port if tunnel else None
+            })
+        except Exception as e:
+            logger.error(f"Error getting tunnel status: {e}")
+            return web.json_response({'success': False, 'error': str(e)}, status=500)
