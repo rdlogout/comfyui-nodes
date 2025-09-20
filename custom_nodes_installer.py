@@ -16,7 +16,7 @@ def register_custom_nodes_routes():
         try:
             # Fetch custom nodes data from API
             logger.info("Fetching custom nodes from API...")
-            nodes_data = get_data('api/machines/custom_node')
+            nodes_data = get_data('api/machines/custom_nodes')
             
             if not nodes_data or not isinstance(nodes_data, list):
                 return web.json_response({
@@ -112,7 +112,7 @@ def register_custom_nodes_routes():
             # Post successful node IDs back to the API
             if successful_node_ids:
                 logger.info(f"Posting {len(successful_node_ids)} successful node IDs back to API...")
-                post_response = post_data('api/machines/custom_node', {'node_ids': successful_node_ids})
+                post_response = post_data('api/machines/custom_nodes', {'node_ids': successful_node_ids})
                 if post_response:
                     logger.info("Successfully posted node IDs to API")
                 else:
