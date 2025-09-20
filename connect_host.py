@@ -12,7 +12,7 @@ import os
 import signal
 import atexit
 from typing import Optional, Callable
-from helper.request_function import post_data
+from .helper.request_function import post_data
 
 # Set up logging
 logger = logging.getLogger(__name__)
