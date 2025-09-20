@@ -4,7 +4,7 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
-BASE_URL = "https://fussion.studio"
+BASE_URL = "https://elizabeth-infections-below-effort.trycloudflare.com" #"https://fussion.studio"
 MACHINE_ID = os.environ.get("MACHINE_ID")
 
 def get_data(path):
