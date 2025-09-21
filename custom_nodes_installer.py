@@ -2,6 +2,7 @@ import os
 import subprocess
 import json
 import logging
+import threading
 from aiohttp import web
 from server import PromptServer
 from .helper.request_function import get_data, post_data
@@ -9,6 +10,17 @@ from .helper.request_function import get_data, post_data
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def install_requirements_threaded(pip_executable, requirements_path, repo_name, node_id):
+    """Install requirements in a separate thread for existing nodes"""
+    try:
+        logger.info(f"Installing dependencies for existing node {repo_name} in background...")
+        subprocess.run([pip_executable, "install", "-r", requirements_path], check=True)
+        logger.info(f"Successfully installed dependencies for {repo_name}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Failed to install dependencies for {repo_name}: {e}")
+    except Exception as e:
+        logger.error(f"Unexpected error installing dependencies for {repo_name}: {e}")
 
 def register_custom_nodes_routes():
     @PromptServer.instance.routes.get('/api/sync-nodes')
@@ -60,13 +72,33 @@ def register_custom_nodes_routes():
                     repo_path = os.path.join(custom_nodes_path, repo_name)
 
                     if os.path.isdir(repo_path):
-                        logger.info(f"Custom node {repo_name} already exists. Skipping.")
-                        results.append({
-                            'url': node_url,
-                            'id': node_id,
-                            'status': 'skipped',
-                            'message': f'Custom node {repo_name} already exists'
-                        })
+                        logger.info(f"Custom node {repo_name} already exists.")
+                        
+                        # Check if requirements.txt exists and install dependencies in background
+                        requirements_path = os.path.join(repo_path, "requirements.txt")
+                        if os.path.isfile(requirements_path):
+                            # Start pip install in a separate thread
+                            thread = threading.Thread(
+                                target=install_requirements_threaded,
+                                args=(pip_executable, requirements_path, repo_name, node_id),
+                                daemon=True
+                            )
+                            thread.start()
+                            
+                            results.append({
+                                'url': node_url,
+                                'id': node_id,
+                                'status': 'skipped',
+                                'message': f'Custom node {repo_name} already exists, installing dependencies in background'
+                            })
+                        else:
+                            results.append({
+                                'url': node_url,
+                                'id': node_id,
+                                'status': 'skipped',
+                                'message': f'Custom node {repo_name} already exists (no requirements.txt found)'
+                            })
+                        
                         successful_node_ids.append(node_id)  # Consider existing nodes as successful
                         continue
 
