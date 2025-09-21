@@ -11,7 +11,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def register_custom_nodes_routes():
-    @PromptServer.instance.routes.get('/custom_nodes')
+    @PromptServer.instance.routes.get('/api/sync-nodes')
+    @PromptServer.instance.routes.post('/api/sync-nodes')
     async def install_custom_nodes(request):
         try:
             # Fetch custom nodes data from API

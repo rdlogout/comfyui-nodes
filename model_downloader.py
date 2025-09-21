@@ -166,7 +166,8 @@ class ModelDownloader:
                 }
 
 def register_model_downloader_routes():
-    @PromptServer.instance.routes.get('/download_model')
+    @PromptServer.instance.routes.get('/api/sync-models')
+    @PromptServer.instance.routes.post('/api/sync-models')
     async def download_models(request):
         try:
             # Fetch models data from API
