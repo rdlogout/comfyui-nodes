@@ -250,11 +250,29 @@ def register_queue_prompt_routes():
             logger.info("Processing workflow prompt")
             processed_workflow = await get_workflow(prompt)
             
-            return web.json_response({
-                'success': True,
-                'processed_workflow': processed_workflow,
-                'message': 'Workflow processed successfully'
-            })
+            # Make POST request to ComfyUI API
+            logger.info("Sending processed workflow to ComfyUI API")
+            comfyui_url = "http://localhost:8188/api/prompt"
+            payload = {"prompt": processed_workflow}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(comfyui_url, json=payload) as response:
+                    if response.status == 200:
+                        comfyui_response = await response.json()
+                        logger.info("Successfully queued prompt to ComfyUI")
+                        return web.json_response({
+                            'success': True,
+                            'comfyui_response': comfyui_response,
+                            'message': 'Workflow processed and queued successfully'
+                        })
+                    else:
+                        error_text = await response.text()
+                        logger.error(f"ComfyUI API error: {response.status} - {error_text}")
+                        return web.json_response({
+                            'success': False,
+                            'error': f'ComfyUI API error: {response.status} - {error_text}',
+                            'processed_workflow': processed_workflow
+                        }, status=response.status)
             
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
