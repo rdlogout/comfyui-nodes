@@ -257,6 +257,36 @@ def format_system_info_for_db(system_info: Dict[str, Any]) -> Dict[str, Any]:
             "available_disk": 0.0
         }
 
+def get_connect_data(url: str) -> Dict[str, Any]:
+    """
+    Collect and format system information for sending to the server
+    
+    Args:
+        url: The tunnel URL endpoint
+        
+    Returns:
+        Dict containing formatted connect data
+    """
+    # Collect system information
+    raw_system_info = get_system_info()
+    
+    # Format system info for database schema
+    formatted_system_info = format_system_info_for_db(raw_system_info)
+    
+    # Prepare data to send to server (flattened structure matching DB schema)
+    connect_data = {
+        "endpoint": url,
+        "gpu": formatted_system_info["gpu"],
+        "vram": formatted_system_info["vram"],
+        "cpu": formatted_system_info["cpu"],
+        "ram": formatted_system_info["ram"],
+        "total_disk": formatted_system_info["total_disk"],
+        "available_disk": formatted_system_info["available_disk"],
+        "timestamp": time.time()
+    }
+    
+    return connect_data
+
 class CloudflareTunnel:
     """Manages Cloudflare tunnel connection for ComfyUI"""
     
@@ -274,6 +304,7 @@ class CloudflareTunnel:
         self.is_running = False
         self.on_url_ready = on_url_ready
         self._stop_event = threading.Event()
+        self._heartbeat_timer = None
         
         # Register cleanup on exit
         atexit.register(self.stop_tunnel)
@@ -346,6 +377,9 @@ class CloudflareTunnel:
                         self.tunnel_url = url_match.group(0)
                         logger.info(f"Tunnel URL ready: {self.tunnel_url}")
                         
+                        # Start heartbeat timer
+                        self._start_heartbeat()
+                        
                         # Call the callback if provided
                         if self.on_url_ready:
                             try:
@@ -362,6 +396,30 @@ class CloudflareTunnel:
             logger.error(f"Error running tunnel: {e}")
             self.is_running = False
     
+    def _start_heartbeat(self):
+        """Start the heartbeat timer to send periodic updates"""
+        if self._heartbeat_timer:
+            self._heartbeat_timer.cancel()
+        
+        self._heartbeat_timer = threading.Timer(30.0, self._send_heartbeat)
+        self._heartbeat_timer.daemon = True
+        self._heartbeat_timer.start()
+    
+    def _send_heartbeat(self):
+        """Send heartbeat data to the server"""
+        if self.tunnel_url and self.is_running:
+            try:
+                connect_data = get_connect_data(self.tunnel_url)
+                logger.debug(f"Sending heartbeat: {connect_data['endpoint']}")
+                post_data("api/machines/connect", connect_data)
+                
+                # Schedule next heartbeat
+                self._start_heartbeat()
+            except Exception as e:
+                logger.error(f"Error sending heartbeat: {e}")
+                # Still schedule next heartbeat even if this one failed
+                self._start_heartbeat()
+    
     def stop_tunnel(self):
         """Stop the Cloudflare tunnel"""
         if not self.is_running or not self.process:
@@ -369,6 +427,11 @@ class CloudflareTunnel:
         
         logger.info("Stopping Cloudflare tunnel...")
         self._stop_event.set()
+        
+        # Stop heartbeat timer
+        if self._heartbeat_timer:
+            self._heartbeat_timer.cancel()
+            self._heartbeat_timer = None
         
         try:
             # Terminate the process gracefully
@@ -420,27 +483,12 @@ def init_tunnel(port: int = 8188, on_url_ready: Optional[Callable[[str], None]] 
         CloudflareTunnel: The tunnel instance
     """
     def on_url_ready_wrapper(url):
-        # Collect system information
-        raw_system_info = get_system_info()
+        # Use the reusable function to get connect data
+        connect_data = get_connect_data(url)
         
-        # Format system info for database schema
-        formatted_system_info = format_system_info_for_db(raw_system_info)
-        
-        # Prepare data to send to server (flattened structure matching DB schema)
-        connect_data = {
-            "endpoint": url,
-            "gpu": formatted_system_info["gpu"],
-            "vram": formatted_system_info["vram"],
-            "cpu": formatted_system_info["cpu"],
-            "ram": formatted_system_info["ram"],
-            "total_disk": formatted_system_info["total_disk"],
-            "available_disk": formatted_system_info["available_disk"],
-            "timestamp": time.time()
-        }
-        
-        logger.info(f"Sending connection data to server: endpoint={url}, gpu={formatted_system_info['gpu']}, "
-                   f"vram={formatted_system_info['vram']}GB, cpu={formatted_system_info['cpu']}, "
-                   f"ram={formatted_system_info['ram']}GB, total_disk={formatted_system_info['total_disk']}GB")
+        logger.info(f"Sending connection data to server: endpoint={url}, gpu={connect_data['gpu']}, "
+                   f"vram={connect_data['vram']}GB, cpu={connect_data['cpu']}, "
+                   f"ram={connect_data['ram']}GB, total_disk={connect_data['total_disk']}GB")
         post_data("api/machines/connect", connect_data)
         
         if on_url_ready:
@@ -472,18 +520,32 @@ from aiohttp import web
 from server import PromptServer
 
 def register_tunnel_routes():
-    @PromptServer.instance.routes.get('/tunnel/status')
-    async def tunnel_status_endpoint(request):
+    @PromptServer.instance.routes.get('/api/sync-host')
+    async def sync_host_endpoint(request):
         try:
             tunnel_url = get_tunnel_url()
             tunnel = get_tunnel_instance()
             
-            return web.json_response({
-                'success': True,
-                'url': tunnel_url,
-                'running': tunnel.is_tunnel_running() if tunnel else False,
-                'port': tunnel.port if tunnel else None
-            })
+            if tunnel_url:
+                # Send connect data to the server
+                connect_data = get_connect_data(tunnel_url)
+                logger.info(f"Syncing host data: endpoint={tunnel_url}")
+                response = post_data("api/machines/connect", connect_data)
+                
+                return web.json_response({
+                    'success': True,
+                    'url': tunnel_url,
+                    'running': tunnel.is_tunnel_running() if tunnel else False,
+                    'port': tunnel.port if tunnel else None,
+                    'sync_response': response
+                })
+            else:
+                return web.json_response({
+                    'success': False,
+                    'error': 'No tunnel URL available',
+                    'running': tunnel.is_tunnel_running() if tunnel else False,
+                    'port': tunnel.port if tunnel else None
+                })
         except Exception as e:
-            logger.error(f"Error getting tunnel status: {e}")
+            logger.error(f"Error syncing host: {e}")
             return web.json_response({'success': False, 'error': str(e)}, status=500)
