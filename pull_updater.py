@@ -2,6 +2,8 @@ import os
 import subprocess
 import logging
 import shutil
+import asyncio
+import aiohttp
 from pathlib import Path
 from aiohttp import web
 from server import PromptServer
@@ -146,6 +148,27 @@ def install_or_update():
         clone_repository()
         return {"updated": True, "message": "Repository cloned successfully"}
 
+async def delayed_reboot_comfyui():
+    """Make a delayed GET call to ComfyUI reboot API after 1 second"""
+    try:
+        # Wait for 1 second before making the reboot call
+        await asyncio.sleep(1)
+        
+        reboot_url = "http://localhost:8188/api/manager/reboot"
+        logger.info(f"Making delayed reboot call to {reboot_url}")
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(reboot_url) as response:
+                if response.status == 200:
+                    logger.info("ComfyUI reboot API called successfully")
+                else:
+                    logger.warning(f"ComfyUI reboot API returned status {response.status}")
+                    
+    except aiohttp.ClientConnectorError as e:
+        logger.error(f"Failed to connect to ComfyUI for reboot: {e}")
+    except Exception as e:
+        logger.error(f"Error calling ComfyUI reboot API: {e}")
+
 def install_dependencies():
     """Install dependencies if requirements.txt exists"""
     requirements_path = os.path.join(TARGET_DIR, "requirements.txt")
@@ -186,6 +209,9 @@ def register_pull_update_routes():
         try:
             logger.info("Starting ComfyUI Nodes pull-update process...")
             
+            # Check for restart query parameter
+            restart_requested = request.query.get('restart', '').lower() == 'true'
+            
             # Check prerequisites
             check_git()
             check_comfyui_installation()
@@ -202,10 +228,18 @@ def register_pull_update_routes():
                 "message": "Pull-update completed successfully",
                 "repository": repo_result,
                 "dependencies": deps_result,
-                "target_directory": TARGET_DIR
+                "target_directory": TARGET_DIR,
+                "restart_scheduled": restart_requested
             }
             
             logger.info("Pull-update completed successfully!")
+            
+            # Schedule delayed reboot if requested
+            if restart_requested:
+                logger.info("Restart requested - scheduling delayed ComfyUI reboot...")
+                asyncio.create_task(delayed_reboot_comfyui())
+                result["message"] += " (ComfyUI restart scheduled)"
+            
             return web.json_response(result)
             
         except Exception as e:

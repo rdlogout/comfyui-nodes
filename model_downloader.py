@@ -202,6 +202,7 @@ def register_model_downloader_routes():
                         logger.warning(f"Skipping invalid model data: {model_data}")
                         models_status.append({
                             'id': model_id,
+                            'path': model_path,
                             'progress': -1  # Error indicator
                         })
                         continue
@@ -224,6 +225,7 @@ def register_model_downloader_routes():
                                             # File is complete
                                             models_status.append({
                                                 'id': model_id,
+                                                'path': model_path,
                                                 'progress': 100
                                             })
                                             continue
@@ -239,6 +241,7 @@ def register_model_downloader_routes():
                                 progress = 0  # Reset for retry
                             models_status.append({
                                 'id': model_id,
+                                'path': model_path,
                                 'progress': progress
                             })
                             continue
@@ -247,6 +250,7 @@ def register_model_downloader_routes():
                     asyncio.create_task(downloader.download_with_progress())
                     models_status.append({
                         'id': model_id,
+                        'path': model_path,
                         'progress': 0
                     })
                     
@@ -254,6 +258,7 @@ def register_model_downloader_routes():
                     logger.error(f"Error processing model {model_data}: {e}")
                     models_status.append({
                         'id': model_data.get('id'),
+                        'path': model_data.get('path'),
                         'progress': -1  # Error indicator
                     })
             
