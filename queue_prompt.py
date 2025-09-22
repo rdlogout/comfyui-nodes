@@ -272,7 +272,7 @@ def register_queue_prompt_routes():
                             'success': False,
                             'error': f'ComfyUI API error: {response.status} - {error_text}',
                             'processed_workflow': processed_workflow
-                        }, status=response.status)
+                        }, status=200)
             
         except json.JSONDecodeError as e:
             logger.error(f"JSON decode error: {e}")
