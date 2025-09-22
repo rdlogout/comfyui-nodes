@@ -10,6 +10,7 @@ import time
 import sys
 import random
 from .helper.request_function import get_data
+from .comfy_services import get_comfyui_config
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -299,6 +300,13 @@ class ModelDownloader:
                 
                 logger.info(f"Download completed: {self.full_path}")
                 print(f"Download completed: {self.path}")
+                
+                # Refresh ComfyUI object info to update model cache
+                try:
+                    await refresh_comfyui_object_info()
+                except Exception as e:
+                    logger.warning(f"Failed to refresh ComfyUI object info: {e}")
+                
                 return  # Success, exit retry loop
                 
             except Exception as e:
@@ -341,6 +349,27 @@ class ModelDownloader:
                     logger.error(f"Download failed permanently after {MAX_RETRIES + 1} attempts: {error_msg}")
                     print(f"\nDownload failed: {self.path} - {error_msg}")
                     break
+
+async def refresh_comfyui_object_info():
+    """Call ComfyUI's object_info API to refresh model cache after download completion"""
+    try:
+        config = get_comfyui_config()
+        object_info_url = f"{config['url']}/api/object_info"
+        
+        logger.info(f"Refreshing ComfyUI object info: {object_info_url}")
+        
+        async with aiohttp.ClientSession(timeout=ClientTimeout(total=10)) as session:
+            async with session.get(object_info_url) as response:
+                if response.status == 200:
+                    logger.info("Successfully refreshed ComfyUI object info")
+                    return True
+                else:
+                    logger.warning(f"Failed to refresh object info: HTTP {response.status}")
+                    return False
+                    
+    except Exception as e:
+        logger.error(f"Error refreshing ComfyUI object info: {e}")
+        return False
 
 def register_model_downloader_routes():
     async def process_single_model(model_data, comfyui_path, semaphore, session):
