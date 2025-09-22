@@ -3,6 +3,7 @@ from .connect_host import register_tunnel_routes
 from .custom_nodes_installer import register_custom_nodes_routes
 from .model_downloader import register_model_downloader_routes
 from .pull_updater import register_pull_update_routes
+from .queue_prompt import register_queue_prompt_routes
 
 def register():
     register_workflow_routes()
@@ -10,3 +11,4 @@ def register():
     register_custom_nodes_routes()
     register_model_downloader_routes()
     register_pull_update_routes()
+    register_queue_prompt_routes()
