@@ -117,20 +117,49 @@ def on_close(ws, close_status_code, close_msg):
     logger.warning(f"WebSocket connection closed: {close_status_code} - {close_msg}")
     
     if should_reconnect:
-        logger.info("Attempting to reconnect in 5 seconds...")
-        time.sleep(5)
-        start_comfy_services()
+        # Schedule reconnection in a separate thread to avoid blocking
+        reconnect_thread = threading.Thread(target=schedule_reconnect, daemon=True)
+        reconnect_thread.start()
 
 def on_open(ws):
     """Handle WebSocket open"""
     global is_connected
     is_connected = True
-    logger.info(f"WebSocket connected with client_id: {client_id}")
+    logger.info(f"✅ WebSocket connection established with client_id: {client_id}")
+
+def schedule_reconnect():
+    """Schedule reconnection with exponential backoff"""
+    global ws_connection
+    
+    retry_count = 0
+    max_retries = 10
+    base_delay = 2
+    
+    while should_reconnect and retry_count < max_retries:
+        delay = min(base_delay * (2 ** retry_count), 60)  # Max 60 seconds
+        logger.info(f"Attempting to reconnect in {delay} seconds... (attempt {retry_count + 1}/{max_retries})")
+        time.sleep(delay)
+        
+        if not should_reconnect:
+            break
+            
+        try:
+            connect_websocket()
+            break  # If successful, exit the retry loop
+        except Exception as e:
+            logger.error(f"Reconnection attempt {retry_count + 1} failed: {e}")
+            retry_count += 1
+    
+    if retry_count >= max_retries:
+        logger.error("Max reconnection attempts reached. Giving up.")
 
 def connect_websocket():
     """Connect to ComfyUI WebSocket"""
     global ws_connection, client_id
     
+    if not should_reconnect:
+        return
+        
     try:
         ws_url = f"{COMFYUI_WS_URL}/ws?clientId={client_id}"
         logger.info(f"Connecting to WebSocket: {ws_url}")
@@ -148,10 +177,7 @@ def connect_websocket():
         
     except Exception as e:
         logger.error(f"Failed to connect to WebSocket: {e}")
-        if should_reconnect:
-            logger.info("Retrying connection in 10 seconds...")
-            time.sleep(10)
-            connect_websocket()
+        raise e  # Re-raise to be handled by schedule_reconnect
 
 def start_comfy_services():
     """Start ComfyUI services (WebSocket connection)"""
@@ -164,11 +190,23 @@ def start_comfy_services():
     should_reconnect = True
     logger.info("Starting ComfyUI services...")
     
-    # Start WebSocket connection in a separate thread
-    ws_thread = threading.Thread(target=connect_websocket, daemon=True)
+    # Start WebSocket connection in a separate thread with initial delay
+    ws_thread = threading.Thread(target=delayed_connect, daemon=True)
     ws_thread.start()
     
     logger.info("ComfyUI services started")
+
+def delayed_connect():
+    """Connect with initial delay to allow ComfyUI server to start"""
+    logger.info("Waiting 3 seconds for ComfyUI server to be ready...")
+    time.sleep(3)
+    
+    try:
+        connect_websocket()
+    except Exception as e:
+        logger.error(f"Initial connection failed: {e}")
+        if should_reconnect:
+            schedule_reconnect()
 
 def stop_comfy_services():
     """Stop ComfyUI services"""
