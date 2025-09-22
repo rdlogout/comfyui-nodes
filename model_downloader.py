@@ -51,32 +51,79 @@ class ModelDownloader:
             
             # Check if file already exists and is complete
             if os.path.exists(self.full_path):
-                # Get file size from server to verify completeness
-                try:
-                    async with aiohttp.ClientSession() as session:
-                        async with session.head(self.url) as response:
-                            if response.status == 200:
-                                expected_size = int(response.headers.get('Content-Length', 0))
-                                actual_size = os.path.getsize(self.full_path)
-                                
-                                if expected_size > 0 and actual_size == expected_size:
+                actual_size = os.path.getsize(self.full_path)
+                
+                # If file has reasonable size (> 0), try to verify with server
+                if actual_size > 0:
+                    try:
+                        async with aiohttp.ClientSession() as session:
+                            async with session.head(self.url) as response:
+                                if response.status == 200:
+                                    expected_size = int(response.headers.get('Content-Length', 0))
+                                    
+                                    if expected_size > 0 and actual_size == expected_size:
+                                        with download_lock:
+                                            download_tasks[self.task_id] = {
+                                                'progress': 100,
+                                                'status': 'completed',
+                                                'url': self.url,
+                                                'path': self.path,
+                                                'message': 'File already exists and is complete',
+                                                'downloaded': actual_size,
+                                                'total': expected_size
+                                            }
+                                        logger.info(f"File already exists and is complete: {self.full_path}")
+                                        return
+                                    elif expected_size > 0 and actual_size != expected_size:
+                                        logger.info(f"File exists but size mismatch. Expected: {expected_size}, Actual: {actual_size}")
+                                        # Continue to re-download
+                                    else:
+                                        # Server doesn't provide Content-Length, assume file is complete if it exists with reasonable size
+                                        with download_lock:
+                                            download_tasks[self.task_id] = {
+                                                'progress': 100,
+                                                'status': 'completed',
+                                                'url': self.url,
+                                                'path': self.path,
+                                                'message': 'File already exists (server verification unavailable)',
+                                                'downloaded': actual_size,
+                                                'total': actual_size
+                                            }
+                                        logger.info(f"File already exists and server doesn't provide size info: {self.full_path}")
+                                        return
+                                else:
+                                    # Server error, but file exists with reasonable size - assume it's complete
                                     with download_lock:
                                         download_tasks[self.task_id] = {
                                             'progress': 100,
                                             'status': 'completed',
                                             'url': self.url,
                                             'path': self.path,
-                                            'message': 'File already exists and is complete',
+                                            'message': 'File already exists (server unreachable)',
                                             'downloaded': actual_size,
-                                            'total': expected_size
+                                            'total': actual_size
                                         }
-                                    logger.info(f"File already exists and is complete: {self.full_path}")
+                                    logger.info(f"File already exists and server unreachable: {self.full_path}")
                                     return
-                                else:
-                                    logger.info(f"File exists but size mismatch. Expected: {expected_size}, Actual: {actual_size}")
-                except Exception as e:
-                    logger.warning(f"Could not verify file size from server: {e}")
-                    # If we can't verify, assume file might be incomplete and re-download
+                    except Exception as e:
+                        logger.warning(f"Could not verify file size from server: {e}")
+                        # Server verification failed, but file exists with reasonable size - assume it's complete
+                        with download_lock:
+                            download_tasks[self.task_id] = {
+                                'progress': 100,
+                                'status': 'completed',
+                                'url': self.url,
+                                'path': self.path,
+                                'message': 'File already exists (server verification failed)',
+                                'downloaded': actual_size,
+                                'total': actual_size
+                            }
+                        logger.info(f"File already exists but server verification failed: {self.full_path}")
+                        return
+                else:
+                    # File exists but has 0 size - delete and re-download
+                    logger.info(f"File exists but is empty, deleting: {self.full_path}")
+                    os.remove(self.full_path)
 
             # Create directory if it doesn't exist
             os.makedirs(os.path.dirname(self.full_path), exist_ok=True)
@@ -213,24 +260,56 @@ def register_model_downloader_routes():
                     
                     # Check if file already exists and is complete
                     if os.path.exists(downloader.full_path):
-                        # Try to verify file completeness
-                        try:
-                            async with aiohttp.ClientSession() as session:
-                                async with session.head(model_url) as response:
-                                    if response.status == 200:
-                                        expected_size = int(response.headers.get('Content-Length', 0))
-                                        actual_size = os.path.getsize(downloader.full_path)
-                                        
-                                        if expected_size > 0 and actual_size == expected_size:
-                                            # File is complete
+                        actual_size = os.path.getsize(downloader.full_path)
+                        
+                        # If file has reasonable size (> 0), try to verify with server
+                        if actual_size > 0:
+                            try:
+                                async with aiohttp.ClientSession() as session:
+                                    async with session.head(model_url) as response:
+                                        if response.status == 200:
+                                            expected_size = int(response.headers.get('Content-Length', 0))
+                                            
+                                            if expected_size > 0 and actual_size == expected_size:
+                                                # File is complete
+                                                models_status.append({
+                                                    'id': model_id,
+                                                    'path': model_path,
+                                                    'progress': 100
+                                                })
+                                                continue
+                                            elif expected_size > 0 and actual_size != expected_size:
+                                                logger.info(f"File exists but size mismatch for {model_url}. Expected: {expected_size}, Actual: {actual_size}")
+                                                # Continue to re-download
+                                            else:
+                                                # Server doesn't provide Content-Length, assume file is complete
+                                                models_status.append({
+                                                    'id': model_id,
+                                                    'path': model_path,
+                                                    'progress': 100
+                                                })
+                                                continue
+                                        else:
+                                            # Server error, but file exists with reasonable size - assume it's complete
                                             models_status.append({
                                                 'id': model_id,
                                                 'path': model_path,
                                                 'progress': 100
                                             })
                                             continue
-                        except Exception as e:
-                            logger.warning(f"Could not verify file size for {model_url}: {e}")
+                            except Exception as e:
+                                logger.warning(f"Could not verify file size for {model_url}: {e}")
+                                # Server verification failed, but file exists with reasonable size - assume it's complete
+                                models_status.append({
+                                    'id': model_id,
+                                    'path': model_path,
+                                    'progress': 100
+                                })
+                                continue
+                        else:
+                            # File exists but has 0 size - delete and re-download
+                            logger.info(f"File exists but is empty, deleting: {downloader.full_path}")
+                            os.remove(downloader.full_path)
                     
                     # Check if download is already in progress
                     with download_lock:
