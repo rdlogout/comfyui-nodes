@@ -107,13 +107,19 @@ def register_custom_nodes_routes():
 
                     requirements_path = os.path.join(repo_path, "requirements.txt")
                     if os.path.isfile(requirements_path):
-                        logger.info(f"Installing dependencies from {requirements_path}")
-                        subprocess.run([pip_executable, "install", "-r", requirements_path], check=True)
+                        # Start pip install in a separate thread for faster response
+                        thread = threading.Thread(
+                            target=install_requirements_threaded,
+                            args=(pip_executable, requirements_path, repo_name, node_id),
+                            daemon=True
+                        )
+                        thread.start()
+                        
                         results.append({
                             'url': node_url,
                             'id': node_id,
                             'status': 'success',
-                            'message': f'Custom node {repo_name} installed with dependencies'
+                            'message': f'Custom node {repo_name} cloned successfully, installing dependencies in background'
                         })
                     else:
                         results.append({
