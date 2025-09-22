@@ -7,6 +7,8 @@ from server import PromptServer
 import threading
 from typing import Dict, Optional
 import time
+import sys
+import random
 from .helper.request_function import get_data
 
 # Configure logging
@@ -17,6 +19,11 @@ logger = logging.getLogger(__name__)
 download_tasks: Dict[str, Dict] = {}
 download_lock = threading.Lock()
 
+# Constants for retry mechanism
+MAX_RETRIES = 3
+BASE_DELAY = 1.0  # Base delay in seconds
+MAX_DELAY = 60.0  # Maximum delay in seconds
+
 class ModelDownloader:
     def __init__(self, url: str, path: str, comfyui_path: str):
         self.url = url
@@ -26,6 +33,7 @@ class ModelDownloader:
         self.full_path = os.path.join(comfyui_path, self.path)
         self.tmp_path = self.full_path + ".tmp"
         self.task_id = f"{url}:{self.path}"
+        self.retry_count = 0
         
         logger.info(f"ModelDownloader initialized:")
         logger.info(f"  Original path: {path}")
@@ -33,184 +41,306 @@ class ModelDownloader:
         logger.info(f"  ComfyUI path: {comfyui_path}")
         logger.info(f"  Full path: {self.full_path}")
         logger.info(f"  Tmp path: {self.tmp_path}")
+    
+    def _calculate_retry_delay(self, attempt: int) -> float:
+        """Calculate exponential backoff delay with jitter"""
+        delay = min(BASE_DELAY * (2 ** attempt), MAX_DELAY)
+        # Add jitter to prevent thundering herd
+        jitter = random.uniform(0.1, 0.3) * delay
+        return delay + jitter
+    
+    def _format_bytes(self, bytes_count: int) -> str:
+        """Format bytes into human readable format"""
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if bytes_count < 1024.0:
+                return f"{bytes_count:.1f}{unit}"
+            bytes_count /= 1024.0
+        return f"{bytes_count:.1f}TB"
+    
+    def _log_progress(self, downloaded: int, total: int, speed: float = 0):
+        """Log progress in a single line like wget/curl"""
+        if total > 0:
+            percent = (downloaded / total) * 100
+            downloaded_str = self._format_bytes(downloaded)
+            total_str = self._format_bytes(total)
+            speed_str = self._format_bytes(speed) + "/s" if speed > 0 else ""
+            
+            # Create progress bar
+            bar_width = 30
+            filled = int(bar_width * downloaded / total)
+            bar = "=" * filled + ">" + " " * (bar_width - filled - 1)
+            
+            # Print progress on same line (overwrite previous)
+            progress_line = f"\r{percent:6.1f}% [{bar}] {downloaded_str}/{total_str} {speed_str}"
+            print(progress_line, end="", flush=True)
+        else:
+            downloaded_str = self._format_bytes(downloaded)
+            speed_str = self._format_bytes(speed) + "/s" if speed > 0 else ""
+            progress_line = f"\r{downloaded_str} downloaded {speed_str}"
+            print(progress_line, end="", flush=True)
         
     async def download_with_progress(self):
-        """Download file with progress tracking and resume capability"""
-        try:
-            # Initialize task in download_tasks
-            with download_lock:
-                download_tasks[self.task_id] = {
-                    'progress': 0,
-                    'status': 'starting',
-                    'url': self.url,
-                    'path': self.path,
-                    'message': 'Checking file status...',
-                    'downloaded': 0,
-                    'total': 0
-                }
-            
-            # Check if file already exists and is complete
-            if os.path.exists(self.full_path):
-                actual_size = os.path.getsize(self.full_path)
+        """Download file with progress tracking, resume capability, and retry logic"""
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                # Initialize or update task in download_tasks
+                with download_lock:
+                    if self.task_id not in download_tasks:
+                        download_tasks[self.task_id] = {
+                            'progress': 0,
+                            'status': 'starting',
+                            'url': self.url,
+                            'path': self.path,
+                            'message': 'Checking file status...',
+                            'downloaded': 0,
+                            'total': 0,
+                            'retry_count': 0
+                        }
+                    
+                    # Update retry count
+                    download_tasks[self.task_id]['retry_count'] = attempt
+                    if attempt > 0:
+                        download_tasks[self.task_id]['message'] = f'Retrying download (attempt {attempt + 1}/{MAX_RETRIES + 1})...'
                 
-                # If file has reasonable size (> 0), try to verify with server
-                if actual_size > 0:
-                    try:
-                        async with aiohttp.ClientSession() as session:
-                            async with session.head(self.url) as response:
-                                if response.status == 200:
-                                    expected_size = int(response.headers.get('Content-Length', 0))
-                                    
-                                    if expected_size > 0 and actual_size == expected_size:
-                                        with download_lock:
-                                            download_tasks[self.task_id] = {
-                                                'progress': 100,
-                                                'status': 'completed',
-                                                'url': self.url,
-                                                'path': self.path,
-                                                'message': 'File already exists and is complete',
-                                                'downloaded': actual_size,
-                                                'total': expected_size
-                                            }
-                                        logger.info(f"File already exists and is complete: {self.full_path}")
-                                        return
-                                    elif expected_size > 0 and actual_size != expected_size:
-                                        logger.info(f"File exists but size mismatch. Expected: {expected_size}, Actual: {actual_size}")
-                                        # Continue to re-download
+                # Check if file already exists and is complete
+                if os.path.exists(self.full_path):
+                    actual_size = os.path.getsize(self.full_path)
+                    
+                    # If file has reasonable size (> 0), try to verify with server
+                    if actual_size > 0:
+                        try:
+                            timeout = ClientTimeout(total=30, connect=10)
+                            async with aiohttp.ClientSession(timeout=timeout) as session:
+                                async with session.head(self.url) as response:
+                                    if response.status == 200:
+                                        expected_size = int(response.headers.get('Content-Length', 0))
+                                        
+                                        if expected_size > 0 and actual_size == expected_size:
+                                            with download_lock:
+                                                download_tasks[self.task_id] = {
+                                                    'progress': 100,
+                                                    'status': 'completed',
+                                                    'url': self.url,
+                                                    'path': self.path,
+                                                    'message': 'File already exists and is complete',
+                                                    'downloaded': actual_size,
+                                                    'total': expected_size,
+                                                    'retry_count': 0
+                                                }
+                                            logger.info(f"File already exists and is complete: {self.full_path}")
+                                            print(f"\nFile already exists: {self.path}")
+                                            return
+                                        elif expected_size > 0 and actual_size != expected_size:
+                                            logger.info(f"File exists but size mismatch. Expected: {expected_size}, Actual: {actual_size}")
+                                            # Continue to re-download
+                                        else:
+                                            # Server doesn't provide Content-Length, assume file is complete
+                                            with download_lock:
+                                                download_tasks[self.task_id] = {
+                                                    'progress': 100,
+                                                    'status': 'completed',
+                                                    'url': self.url,
+                                                    'path': self.path,
+                                                    'message': 'File already exists (server verification unavailable)',
+                                                    'downloaded': actual_size,
+                                                    'total': actual_size,
+                                                    'retry_count': 0
+                                                }
+                                            logger.info(f"File already exists and server doesn't provide size info: {self.full_path}")
+                                            print(f"\nFile already exists: {self.path}")
+                                            return
                                     else:
-                                        # Server doesn't provide Content-Length, assume file is complete if it exists with reasonable size
+                                        # Server error, but file exists with reasonable size - assume it's complete
                                         with download_lock:
                                             download_tasks[self.task_id] = {
                                                 'progress': 100,
                                                 'status': 'completed',
                                                 'url': self.url,
                                                 'path': self.path,
-                                                'message': 'File already exists (server verification unavailable)',
+                                                'message': 'File already exists (server unreachable)',
                                                 'downloaded': actual_size,
-                                                'total': actual_size
+                                                'total': actual_size,
+                                                'retry_count': 0
                                             }
-                                        logger.info(f"File already exists and server doesn't provide size info: {self.full_path}")
+                                        logger.info(f"File already exists and server unreachable: {self.full_path}")
+                                        print(f"\nFile already exists: {self.path}")
                                         return
-                                else:
-                                    # Server error, but file exists with reasonable size - assume it's complete
-                                    with download_lock:
-                                        download_tasks[self.task_id] = {
-                                            'progress': 100,
-                                            'status': 'completed',
-                                            'url': self.url,
-                                            'path': self.path,
-                                            'message': 'File already exists (server unreachable)',
-                                            'downloaded': actual_size,
-                                            'total': actual_size
-                                        }
-                                    logger.info(f"File already exists and server unreachable: {self.full_path}")
-                                    return
-                    except Exception as e:
-                        logger.warning(f"Could not verify file size from server: {e}")
-                        # Server verification failed, but file exists with reasonable size - assume it's complete
-                        with download_lock:
-                            download_tasks[self.task_id] = {
-                                'progress': 100,
-                                'status': 'completed',
-                                'url': self.url,
-                                'path': self.path,
-                                'message': 'File already exists (server verification failed)',
-                                'downloaded': actual_size,
-                                'total': actual_size
-                            }
-                        logger.info(f"File already exists but server verification failed: {self.full_path}")
-                        return
-                else:
-                    # File exists but has 0 size - delete and re-download
-                    logger.info(f"File exists but is empty, deleting: {self.full_path}")
-                    os.remove(self.full_path)
-
-            # Create directory if it doesn't exist
-            os.makedirs(os.path.dirname(self.full_path), exist_ok=True)
-            
-            # Check if partial download exists
-            resume_pos = 0
-            if os.path.exists(self.tmp_path):
-                resume_pos = os.path.getsize(self.tmp_path)
-                logger.info(f"Resuming download from position {resume_pos}")
-
-            headers = {}
-            if resume_pos > 0:
-                headers['Range'] = f'bytes={resume_pos}-'
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self.url, headers=headers) as response:
-                    if response.status not in [200, 206]:  # 206 for partial content
-                        raise Exception(f"HTTP {response.status}: {response.reason}")
-                    
-                    # Get total file size
-                    if response.status == 206:
-                        # For resumed downloads, get size from Content-Range header
-                        content_range = response.headers.get('Content-Range', '')
-                        if content_range:
-                            total_size = int(content_range.split('/')[-1])
-                        else:
-                            total_size = resume_pos + int(response.headers.get('Content-Length', 0))
+                        except Exception as e:
+                            logger.warning(f"Could not verify file size from server: {e}")
+                            # Server verification failed, but file exists with reasonable size - assume it's complete
+                            with download_lock:
+                                download_tasks[self.task_id] = {
+                                    'progress': 100,
+                                    'status': 'completed',
+                                    'url': self.url,
+                                    'path': self.path,
+                                    'message': 'File already exists (server verification failed)',
+                                    'downloaded': actual_size,
+                                    'total': actual_size,
+                                    'retry_count': 0
+                                }
+                            logger.info(f"File already exists but server verification failed: {self.full_path}")
+                            print(f"\nFile already exists: {self.path}")
+                            return
                     else:
-                        total_size = int(response.headers.get('Content-Length', 0))
+                        # File exists but has 0 size - delete and re-download
+                        logger.info(f"File exists but is empty, deleting: {self.full_path}")
+                        os.remove(self.full_path)
+
+                # Create directory if it doesn't exist
+                os.makedirs(os.path.dirname(self.full_path), exist_ok=True)
+                
+                # Check if partial download exists
+                resume_pos = 0
+                if os.path.exists(self.tmp_path):
+                    resume_pos = os.path.getsize(self.tmp_path)
+                    logger.info(f"Resuming download from position {resume_pos}")
+
+                headers = {}
+                if resume_pos > 0:
+                    headers['Range'] = f'bytes={resume_pos}-'
+
+                # Configure session with better timeouts and connection settings
+                connector = aiohttp.TCPConnector(
+                    limit=10,
+                    limit_per_host=5,
+                    ttl_dns_cache=300,
+                    use_dns_cache=True,
+                    keepalive_timeout=30,
+                    enable_cleanup_closed=True
+                )
+                timeout = ClientTimeout(total=300, connect=30, sock_read=60)  # Increased timeouts
+                
+                async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                    async with session.get(self.url, headers=headers) as response:
+                        if response.status not in [200, 206]:  # 206 for partial content
+                            raise aiohttp.ClientResponseError(
+                                request_info=response.request_info,
+                                history=response.history,
+                                status=response.status,
+                                message=f"HTTP {response.status}: {response.reason}"
+                            )
+                        
+                        # Get total file size
+                        if response.status == 206:
+                            # For resumed downloads, get size from Content-Range header
+                            content_range = response.headers.get('Content-Range', '')
+                            if content_range:
+                                total_size = int(content_range.split('/')[-1])
+                            else:
+                                total_size = resume_pos + int(response.headers.get('Content-Length', 0))
+                        else:
+                            total_size = int(response.headers.get('Content-Length', 0))
+                        
+                        downloaded = resume_pos
+                        last_update_time = time.time()
+                        last_downloaded = downloaded
+                        
+                        # Update progress tracking with download info
+                        with download_lock:
+                            download_tasks[self.task_id].update({
+                                'progress': int((downloaded / total_size) * 100) if total_size > 0 else 0,
+                                'status': 'downloading',
+                                'downloaded': downloaded,
+                                'total': total_size,
+                                'message': 'Starting download...'
+                            })
+                        
+                        print(f"\nDownloading: {self.path}")
+                        
+                        # Open file in append mode for resume
+                        mode = 'ab' if resume_pos > 0 else 'wb'
+                        with open(self.tmp_path, mode) as file:
+                            chunk_size = 32768  # Increased chunk size for better performance
+                            async for chunk in response.content.iter_chunked(chunk_size):
+                                file.write(chunk)
+                                downloaded += len(chunk)
+                                
+                                # Calculate speed and update progress
+                                current_time = time.time()
+                                if current_time - last_update_time >= 0.5:  # Update every 0.5 seconds
+                                    speed = (downloaded - last_downloaded) / (current_time - last_update_time)
+                                    self._log_progress(downloaded, total_size, speed)
+                                    
+                                    # Update progress in download_tasks
+                                    if total_size > 0:
+                                        progress = int((downloaded / total_size) * 100)
+                                        with download_lock:
+                                            if self.task_id in download_tasks:
+                                                download_tasks[self.task_id].update({
+                                                    'progress': progress,
+                                                    'downloaded': downloaded,
+                                                    'message': f'Downloading... {progress}%'
+                                                })
+                                    
+                                    last_update_time = current_time
+                                    last_downloaded = downloaded
+                
+                # Final progress update
+                if total_size > 0:
+                    self._log_progress(downloaded, total_size)
+                print()  # New line after progress
+                
+                # Move from .tmp to final location (atomic operation)
+                os.rename(self.tmp_path, self.full_path)
+                
+                # Update final status
+                with download_lock:
+                    download_tasks[self.task_id] = {
+                        'progress': 100,
+                        'status': 'completed',
+                        'url': self.url,
+                        'path': self.path,
+                        'downloaded': downloaded,
+                        'total': total_size,
+                        'message': 'Download completed successfully',
+                        'retry_count': attempt
+                    }
+                
+                logger.info(f"Download completed: {self.full_path}")
+                print(f"Download completed: {self.path}")
+                return  # Success, exit retry loop
+                
+            except Exception as e:
+                error_msg = str(e)
+                logger.error(f"Download attempt {attempt + 1} failed: {error_msg}")
+                
+                # Clean up partial download on certain errors
+                if isinstance(e, (aiohttp.ClientResponseError, aiohttp.ClientConnectorError)):
+                    if os.path.exists(self.tmp_path) and attempt < MAX_RETRIES:
+                        # Keep partial file for resume on network errors
+                        logger.info(f"Keeping partial download for resume: {self.tmp_path}")
+                    elif os.path.exists(self.tmp_path) and attempt == MAX_RETRIES:
+                        # Remove partial file on final failure
+                        os.remove(self.tmp_path)
+                        logger.info(f"Removed partial download after final failure: {self.tmp_path}")
+                
+                if attempt < MAX_RETRIES:
+                    # Calculate delay for next retry
+                    delay = self._calculate_retry_delay(attempt)
+                    logger.info(f"Retrying in {delay:.1f} seconds...")
                     
-                    downloaded = resume_pos
-                    
-                    # Update progress tracking with download info
                     with download_lock:
                         download_tasks[self.task_id].update({
-                            'progress': int((downloaded / total_size) * 100) if total_size > 0 else 0,
-                            'status': 'downloading',
-                            'downloaded': downloaded,
-                            'total': total_size,
-                            'message': 'Starting download...'
+                            'status': 'retrying',
+                            'message': f'Retry {attempt + 1}/{MAX_RETRIES} in {delay:.1f}s: {error_msg}'
                         })
                     
-                    # Open file in append mode for resume
-                    mode = 'ab' if resume_pos > 0 else 'wb'
-                    with open(self.tmp_path, mode) as file:
-                        async for chunk in response.content.iter_chunked(8192):
-                            file.write(chunk)
-                            downloaded += len(chunk)
-                            
-                            # Update progress
-                            if total_size > 0:
-                                progress = int((downloaded / total_size) * 100)
-                                with download_lock:
-                                    if self.task_id in download_tasks:
-                                        download_tasks[self.task_id].update({
-                                            'progress': progress,
-                                            'downloaded': downloaded,
-                                            'message': f'Downloading... {progress}%'
-                                        })
-            
-            # Move from .tmp to final location (atomic operation)
-            os.rename(self.tmp_path, self.full_path)
-            
-            # Update final status
-            with download_lock:
-                download_tasks[self.task_id] = {
-                    'progress': 100,
-                    'status': 'completed',
-                    'url': self.url,
-                    'path': self.path,
-                    'downloaded': downloaded,
-                    'total': total_size,
-                    'message': 'Download completed successfully'
-                }
-            
-            logger.info(f"Download completed: {self.full_path}")
-            
-        except Exception as e:
-            logger.error(f"Download failed: {e}")
-            with download_lock:
-                download_tasks[self.task_id] = {
-                    'progress': -1,
-                    'status': 'error',
-                    'url': self.url,
-                    'path': self.path,
-                    'message': f'Download failed: {str(e)}'
-                }
+                    await asyncio.sleep(delay)
+                else:
+                    # Final failure
+                    with download_lock:
+                        download_tasks[self.task_id] = {
+                            'progress': -1,
+                            'status': 'error',
+                            'url': self.url,
+                            'path': self.path,
+                            'message': f'Download failed after {MAX_RETRIES + 1} attempts: {error_msg}',
+                            'retry_count': attempt
+                        }
+                    logger.error(f"Download failed permanently after {MAX_RETRIES + 1} attempts: {error_msg}")
+                    print(f"\nDownload failed: {self.path} - {error_msg}")
+                    break
 
 def register_model_downloader_routes():
     async def process_single_model(model_data, comfyui_path, semaphore, session):
@@ -240,8 +370,8 @@ def register_model_downloader_routes():
                     # If file has reasonable size (> 0), try to verify with server
                     if actual_size > 0:
                         try:
-                            # Use shared session for better performance
-                            async with session.head(model_url, timeout=ClientTimeout(total=10)) as response:
+                            # Use shared session for better performance with increased timeout
+                            async with session.head(model_url, timeout=ClientTimeout(total=30, connect=10)) as response:
                                 if response.status == 200:
                                     expected_size = int(response.headers.get('Content-Length', 0))
                                     
@@ -344,12 +474,15 @@ def register_model_downloader_routes():
             # Configure session with connection pooling and timeouts
             connector = aiohttp.TCPConnector(
                 limit=20,  # Total connection pool size
-                limit_per_host=8,  # Max connections per host
+                limit_per_host=5,  # Max connections per host (reduced to prevent overwhelming servers)
                 ttl_dns_cache=300,  # DNS cache TTL
                 use_dns_cache=True,
+                keepalive_timeout=30,
+                enable_cleanup_closed=True,
+                force_close=False
             )
             
-            timeout = ClientTimeout(total=30, connect=10)
+            timeout = ClientTimeout(total=60, connect=15, sock_read=30)  # Increased timeouts
             
             async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                 tasks = [process_single_model(model_data, comfyui_path, semaphore, session) for model_data in models_data]
@@ -446,7 +579,13 @@ def register_model_downloader_routes():
     @PromptServer.instance.routes.get('/download_progress/{task_id}')
     async def get_download_progress(request):
         try:
-            task_id = request.match_info['task_id']
+            task_id = request.match_info.get('task_id', '').strip()
+            
+            if not task_id:
+                return web.json_response({
+                    'success': False,
+                    'error': 'Task ID is required'
+                }, status=400)
             
             with download_lock:
                 if task_id in download_tasks:
@@ -454,23 +593,24 @@ def register_model_downloader_routes():
                     return web.json_response({
                         'success': True,
                         'task_id': task_id,
-                        'progress': task['progress'],
-                        'status': task['status'],
-                        'message': task['message'],
+                        'progress': task.get('progress', 0),
+                        'status': task.get('status', 'unknown'),
+                        'message': task.get('message', ''),
                         'downloaded': task.get('downloaded', 0),
-                        'total': task.get('total', 0)
+                        'total': task.get('total', 0),
+                        'retry_count': task.get('retry_count', 0)
                     })
                 else:
                     return web.json_response({
                         'success': False,
-                        'error': 'Task not found'
+                        'error': f'Task not found: {task_id}'
                     }, status=404)
                     
         except Exception as e:
-            logger.error(f"Error getting download progress: {e}")
+            logger.error(f"Error getting download progress for task {task_id}: {e}")
             return web.json_response({
                 'success': False,
-                'error': str(e)
+                'error': f'Internal server error: {str(e)}'
             }, status=500)
     
     @PromptServer.instance.routes.get('/download_tasks')
