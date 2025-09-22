@@ -2,7 +2,7 @@ import os
 import asyncio
 import aiohttp
 import logging
-from aiohttp import web
+from aiohttp import web, ClientTimeout
 from server import PromptServer
 import threading
 from typing import Dict, Optional
@@ -213,6 +213,104 @@ class ModelDownloader:
                 }
 
 def register_model_downloader_routes():
+    async def process_single_model(model_data, comfyui_path, semaphore, session):
+        """Process a single model with concurrency control and shared session"""
+        async with semaphore:  # Limit concurrent operations
+            try:
+                model_url = model_data.get('url')
+                model_id = model_data.get('id')
+                model_path = model_data.get('path')
+                
+                if not model_url or not model_id or not model_path:
+                    logger.warning(f"Skipping invalid model data: {model_data}")
+                    return {
+                        'id': model_id,
+                        'path': model_path,
+                        'progress': -1  # Error indicator
+                    }
+                
+                # Create downloader to get the correct task_id and check file status
+                downloader = ModelDownloader(model_url, model_path, comfyui_path)
+                task_id = downloader.task_id
+                
+                # Check if file already exists and is complete
+                if os.path.exists(downloader.full_path):
+                    actual_size = os.path.getsize(downloader.full_path)
+                    
+                    # If file has reasonable size (> 0), try to verify with server
+                    if actual_size > 0:
+                        try:
+                            # Use shared session for better performance
+                            async with session.head(model_url, timeout=ClientTimeout(total=10)) as response:
+                                if response.status == 200:
+                                    expected_size = int(response.headers.get('Content-Length', 0))
+                                    
+                                    if expected_size > 0 and actual_size == expected_size:
+                                        # File is complete
+                                        return {
+                                            'id': model_id,
+                                            'path': model_path,
+                                            'progress': 100
+                                        }
+                                    elif expected_size > 0 and actual_size != expected_size:
+                                        logger.info(f"File exists but size mismatch for {model_url}. Expected: {expected_size}, Actual: {actual_size}")
+                                        # Continue to re-download
+                                    else:
+                                        # Server doesn't provide Content-Length, assume file is complete
+                                        return {
+                                            'id': model_id,
+                                            'path': model_path,
+                                            'progress': 100
+                                        }
+                                else:
+                                    # Server error, but file exists with reasonable size - assume it's complete
+                                    return {
+                                        'id': model_id,
+                                        'path': model_path,
+                                        'progress': 100
+                                    }
+                        except Exception as e:
+                            logger.warning(f"Could not verify file size for {model_url}: {e}")
+                            # Server verification failed, but file exists with reasonable size - assume it's complete
+                            return {
+                                'id': model_id,
+                                'path': model_path,
+                                'progress': 100
+                            }
+                    else:
+                        # File exists but has 0 size - delete and re-download
+                        logger.info(f"File exists but is empty, deleting: {downloader.full_path}")
+                        os.remove(downloader.full_path)
+                
+                # Check if download is already in progress
+                with download_lock:
+                    if task_id in download_tasks:
+                        existing_task = download_tasks[task_id]
+                        progress = existing_task['progress']
+                        if progress == -1:  # Error state
+                            progress = 0  # Reset for retry
+                        return {
+                            'id': model_id,
+                            'path': model_path,
+                            'progress': progress
+                        }
+                
+                # File doesn't exist or is incomplete, schedule download
+                asyncio.create_task(downloader.download_with_progress())
+                return {
+                    'id': model_id,
+                    'path': model_path,
+                    'progress': 0
+                }
+                
+            except Exception as e:
+                logger.error(f"Error processing model {model_data}: {e}")
+                return {
+                    'id': model_data.get('id'),
+                    'path': model_data.get('path'),
+                    'progress': -1  # Error indicator
+                }
+
     @PromptServer.instance.routes.get('/api/sync-models')
     @PromptServer.instance.routes.post('/api/sync-models')
     async def download_models(request):
@@ -237,114 +335,43 @@ def register_model_downloader_routes():
                     'error': f'ComfyUI directory not found at {comfyui_path}'
                 }, status=500)
             
-            models_status = []
+            # Create semaphore to limit concurrent operations (max 8 concurrent checks/downloads)
+            semaphore = asyncio.Semaphore(8)
             
-            for model_data in models_data:
-                try:
-                    model_url = model_data.get('url')
-                    model_id = model_data.get('id')
-                    model_path = model_data.get('path')
-                    
-                    if not model_url or not model_id or not model_path:
-                        logger.warning(f"Skipping invalid model data: {model_data}")
-                        models_status.append({
-                            'id': model_id,
-                            'path': model_path,
-                            'progress': -1  # Error indicator
-                        })
-                        continue
-                    
-                    # Create downloader to get the correct task_id and check file status
-                    downloader = ModelDownloader(model_url, model_path, comfyui_path)
-                    task_id = downloader.task_id
-                    
-                    # Check if file already exists and is complete
-                    if os.path.exists(downloader.full_path):
-                        actual_size = os.path.getsize(downloader.full_path)
-                        
-                        # If file has reasonable size (> 0), try to verify with server
-                        if actual_size > 0:
-                            try:
-                                async with aiohttp.ClientSession() as session:
-                                    async with session.head(model_url) as response:
-                                        if response.status == 200:
-                                            expected_size = int(response.headers.get('Content-Length', 0))
-                                            
-                                            if expected_size > 0 and actual_size == expected_size:
-                                                # File is complete
-                                                models_status.append({
-                                                    'id': model_id,
-                                                    'path': model_path,
-                                                    'progress': 100
-                                                })
-                                                continue
-                                            elif expected_size > 0 and actual_size != expected_size:
-                                                logger.info(f"File exists but size mismatch for {model_url}. Expected: {expected_size}, Actual: {actual_size}")
-                                                # Continue to re-download
-                                            else:
-                                                # Server doesn't provide Content-Length, assume file is complete
-                                                models_status.append({
-                                                    'id': model_id,
-                                                    'path': model_path,
-                                                    'progress': 100
-                                                })
-                                                continue
-                                        else:
-                                            # Server error, but file exists with reasonable size - assume it's complete
-                                            models_status.append({
-                                                'id': model_id,
-                                                'path': model_path,
-                                                'progress': 100
-                                            })
-                                            continue
-                            except Exception as e:
-                                logger.warning(f"Could not verify file size for {model_url}: {e}")
-                                # Server verification failed, but file exists with reasonable size - assume it's complete
-                                models_status.append({
-                                    'id': model_id,
-                                    'path': model_path,
-                                    'progress': 100
-                                })
-                                continue
-                        else:
-                            # File exists but has 0 size - delete and re-download
-                            logger.info(f"File exists but is empty, deleting: {downloader.full_path}")
-                            os.remove(downloader.full_path)
-                    
-                    # Check if download is already in progress
-                    with download_lock:
-                        if task_id in download_tasks:
-                            existing_task = download_tasks[task_id]
-                            progress = existing_task['progress']
-                            if progress == -1:  # Error state
-                                progress = 0  # Reset for retry
-                            models_status.append({
-                                'id': model_id,
-                                'path': model_path,
-                                'progress': progress
-                            })
-                            continue
-                    
-                    # File doesn't exist or is incomplete, schedule download
-                    asyncio.create_task(downloader.download_with_progress())
-                    models_status.append({
-                        'id': model_id,
-                        'path': model_path,
-                        'progress': 0
+            # Process all models in parallel with shared session
+            logger.info(f"Processing {len(models_data)} models in parallel...")
+            
+            # Configure session with connection pooling and timeouts
+            connector = aiohttp.TCPConnector(
+                limit=20,  # Total connection pool size
+                limit_per_host=8,  # Max connections per host
+                ttl_dns_cache=300,  # DNS cache TTL
+                use_dns_cache=True,
+            )
+            
+            timeout = ClientTimeout(total=30, connect=10)
+            
+            async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
+                tasks = [process_single_model(model_data, comfyui_path, semaphore, session) for model_data in models_data]
+                models_status = await asyncio.gather(*tasks, return_exceptions=True)
+            
+            # Handle any exceptions that occurred during processing
+            final_models_status = []
+            for i, result in enumerate(models_status):
+                if isinstance(result, Exception):
+                    logger.error(f"Exception processing model {models_data[i]}: {result}")
+                    final_models_status.append({
+                        'id': models_data[i].get('id'),
+                        'path': models_data[i].get('path'),
+                        'progress': -1
                     })
-                    
-                except Exception as e:
-                    logger.error(f"Error processing model {model_data}: {e}")
-                    models_status.append({
-                        'id': model_data.get('id'),
-                        'path': model_data.get('path'),
-                        'progress': -1  # Error indicator
-                    })
+                else:
+                    final_models_status.append(result)
             
             return web.json_response({
                 'success': True,
                 'message': 'Models download status checked and downloads scheduled',
-                'models': models_status
+                'models': final_models_status
             })
             
         except Exception as e:
