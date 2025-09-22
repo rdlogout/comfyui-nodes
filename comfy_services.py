@@ -119,7 +119,7 @@ def on_close(ws, close_status_code, close_msg):
     if should_reconnect:
         logger.info("Attempting to reconnect in 5 seconds...")
         time.sleep(5)
-        start_comfy_services()
+        # start_comfy_services()
 
 def on_open(ws):
     """Handle WebSocket open"""
