@@ -5,7 +5,9 @@ import sys
 
 from . import custom_routes
 from .connect_host import init_tunnel
+from .comfy_services import start_comfy_services
 
 init_tunnel()
 custom_routes.register()
-__all__= []
+start_comfy_services()
+# __all__= []
