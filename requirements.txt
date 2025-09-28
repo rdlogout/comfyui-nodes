@@ -3,3 +3,4 @@ python-dotenv
 psutil
 websocket-client
 aiofiles
+aiohttp
