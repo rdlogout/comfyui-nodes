@@ -26,11 +26,12 @@ BASE_DELAY = 1.0  # Base delay in seconds
 MAX_DELAY = 60.0  # Maximum delay in seconds
 
 class ModelDownloader:
-    def __init__(self, url: str, path: str, comfyui_path: str):
+    def __init__(self, url: str, path: str, comfyui_path: str, force: bool = False):
         self.url = url
         # Ensure path is relative by removing leading slashes
         self.path = path.lstrip('/')
         self.comfyui_path = comfyui_path
+        self.force = force  # Force re-download even if file exists
         self.full_path = os.path.join(comfyui_path, self.path)
         self.tmp_path = self.full_path + ".tmp"
         self.task_id = f"{url}:{self.path}"
@@ -42,6 +43,7 @@ class ModelDownloader:
         logger.info(f"  ComfyUI path: {comfyui_path}")
         logger.info(f"  Full path: {self.full_path}")
         logger.info(f"  Tmp path: {self.tmp_path}")
+        logger.info(f"  Force download: {self.force}")
     
     def _calculate_retry_delay(self, attempt: int) -> float:
         """Calculate exponential backoff delay with jitter"""
@@ -103,11 +105,34 @@ class ModelDownloader:
                     if attempt > 0:
                         download_tasks[self.task_id]['message'] = f'Retrying download (attempt {attempt + 1}/{MAX_RETRIES + 1})...'
                 
-                # Check if file already exists and is complete
-                if os.path.exists(self.full_path):
+                # Check if file already exists and handle based on force parameter
+                if os.path.exists(self.full_path) and not self.force:
                     actual_size = os.path.getsize(self.full_path)
                     
-                    # If file has reasonable size (> 0), try to verify with server
+                    # If force=false and file exists with reasonable size (> 0), skip verification
+                    if actual_size > 0:
+                        logger.info(f"File already exists, skipping verification (force=false): {self.full_path}")
+                        with download_lock:
+                            download_tasks[self.task_id] = {
+                                'progress': 100,
+                                'status': 'completed',
+                                'url': self.url,
+                                'path': self.path,
+                                'message': 'File already exists (skipped verification)',
+                                'downloaded': actual_size,
+                                'total': actual_size,
+                                'retry_count': 0
+                            }
+                        print(f"\nFile already exists: {self.path}")
+                        return
+                    else:
+                        # File exists but has 0 size - delete and re-download
+                        logger.info(f"File exists but is empty, deleting: {self.full_path}")
+                        os.remove(self.full_path)
+                elif os.path.exists(self.full_path) and self.force:
+                    # Force re-download - verify file size with server
+                    actual_size = os.path.getsize(self.full_path)
+                    
                     if actual_size > 0:
                         try:
                             timeout = ClientTimeout(total=30, connect=10)
@@ -117,75 +142,28 @@ class ModelDownloader:
                                         expected_size = int(response.headers.get('Content-Length', 0))
                                         
                                         if expected_size > 0 and actual_size == expected_size:
-                                            with download_lock:
-                                                download_tasks[self.task_id] = {
-                                                    'progress': 100,
-                                                    'status': 'completed',
-                                                    'url': self.url,
-                                                    'path': self.path,
-                                                    'message': 'File already exists and is complete',
-                                                    'downloaded': actual_size,
-                                                    'total': expected_size,
-                                                    'retry_count': 0
-                                                }
-                                            logger.info(f"File already exists and is complete: {self.full_path}")
-                                            print(f"\nFile already exists: {self.path}")
-                                            return
+                                            # File is complete, but force=true means we should re-download
+                                            logger.info(f"File exists and is complete, but force=true - re-downloading: {self.full_path}")
+                                            os.remove(self.full_path)  # Delete existing file
                                         elif expected_size > 0 and actual_size != expected_size:
-                                            logger.info(f"File exists but size mismatch. Expected: {expected_size}, Actual: {actual_size}")
-                                            # Continue to re-download
+                                            logger.info(f"File exists but size mismatch (force=true). Expected: {expected_size}, Actual: {actual_size}")
+                                            os.remove(self.full_path)  # Delete mismatched file
                                         else:
-                                            # Server doesn't provide Content-Length, assume file is complete
-                                            with download_lock:
-                                                download_tasks[self.task_id] = {
-                                                    'progress': 100,
-                                                    'status': 'completed',
-                                                    'url': self.url,
-                                                    'path': self.path,
-                                                    'message': 'File already exists (server verification unavailable)',
-                                                    'downloaded': actual_size,
-                                                    'total': actual_size,
-                                                    'retry_count': 0
-                                                }
-                                            logger.info(f"File already exists and server doesn't provide size info: {self.full_path}")
-                                            print(f"\nFile already exists: {self.path}")
-                                            return
+                                            # Server doesn't provide Content-Length, re-download
+                                            logger.info(f"Server doesn't provide size info (force=true), re-downloading: {self.full_path}")
+                                            os.remove(self.full_path)
                                     else:
-                                        # Server error, but file exists with reasonable size - assume it's complete
-                                        with download_lock:
-                                            download_tasks[self.task_id] = {
-                                                'progress': 100,
-                                                'status': 'completed',
-                                                'url': self.url,
-                                                'path': self.path,
-                                                'message': 'File already exists (server unreachable)',
-                                                'downloaded': actual_size,
-                                                'total': actual_size,
-                                                'retry_count': 0
-                                            }
-                                        logger.info(f"File already exists and server unreachable: {self.full_path}")
-                                        print(f"\nFile already exists: {self.path}")
-                                        return
+                                        # Server error, but force=true means re-download anyway
+                                        logger.info(f"Server unreachable (force=true), re-downloading: {self.full_path}")
+                                        os.remove(self.full_path)
                         except Exception as e:
-                            logger.warning(f"Could not verify file size from server: {e}")
-                            # Server verification failed, but file exists with reasonable size - assume it's complete
-                            with download_lock:
-                                download_tasks[self.task_id] = {
-                                    'progress': 100,
-                                    'status': 'completed',
-                                    'url': self.url,
-                                    'path': self.path,
-                                    'message': 'File already exists (server verification failed)',
-                                    'downloaded': actual_size,
-                                    'total': actual_size,
-                                    'retry_count': 0
-                                }
-                            logger.info(f"File already exists but server verification failed: {self.full_path}")
-                            print(f"\nFile already exists: {self.path}")
-                            return
+                            logger.warning(f"Could not verify file size from server (force=true): {e}")
+                            # Server verification failed, but force=true means re-download anyway
+                            logger.info(f"Server verification failed (force=true), re-downloading: {self.full_path}")
+                            os.remove(self.full_path)
                     else:
                         # File exists but has 0 size - delete and re-download
-                        logger.info(f"File exists but is empty, deleting: {self.full_path}")
+                        logger.info(f"File exists but is empty (force=true), deleting: {self.full_path}")
                         os.remove(self.full_path)
 
                 # Create directory if it doesn't exist
@@ -313,20 +291,49 @@ class ModelDownloader:
                 error_msg = str(e)
                 logger.error(f"Download attempt {attempt + 1} failed: {error_msg}")
                 
-                # Clean up partial download on certain errors
-                if isinstance(e, (aiohttp.ClientResponseError, aiohttp.ClientConnectorError)):
-                    if os.path.exists(self.tmp_path) and attempt < MAX_RETRIES:
-                        # Keep partial file for resume on network errors
-                        logger.info(f"Keeping partial download for resume: {self.tmp_path}")
-                    elif os.path.exists(self.tmp_path) and attempt == MAX_RETRIES:
-                        # Remove partial file on final failure
-                        os.remove(self.tmp_path)
-                        logger.info(f"Removed partial download after final failure: {self.tmp_path}")
+                # Determine if this error is retryable
+                is_retryable = True
+                should_keep_partial = True
                 
-                if attempt < MAX_RETRIES:
+                # Categorize errors for better retry handling
+                if isinstance(e, aiohttp.ClientResponseError):
+                    if e.status in [404, 410]:  # Not found or gone - don't retry
+                        is_retryable = False
+                        should_keep_partial = False
+                    elif e.status in [401, 403]:  # Authentication errors - don't retry
+                        is_retryable = False
+                        should_keep_partial = False
+                    elif e.status >= 500:  # Server errors - retry with longer delay
+                        should_keep_partial = True
+                    else:  # Other HTTP errors - retry
+                        should_keep_partial = True
+                elif isinstance(e, (aiohttp.ClientConnectorError, aiohttp.ClientProxyConnectionError)):
+                    # Network connection errors - retry
+                    should_keep_partial = True
+                elif isinstance(e, asyncio.TimeoutError):
+                    # Timeout errors - retry
+                    should_keep_partial = True
+                elif isinstance(e, (ConnectionError, OSError)):
+                    # Connection and OS errors - retry
+                    should_keep_partial = True
+                else:
+                    # Unknown errors - retry cautiously
+                    should_keep_partial = True
+                
+                # Clean up partial download based on error type
+                if os.path.exists(self.tmp_path):
+                    if not should_keep_partial or attempt == MAX_RETRIES:
+                        # Remove partial file on non-retryable errors or final failure
+                        os.remove(self.tmp_path)
+                        logger.info(f"Removed partial download: {self.tmp_path}")
+                    elif should_keep_partial and attempt < MAX_RETRIES:
+                        # Keep partial file for resume on retryable errors
+                        logger.info(f"Keeping partial download for resume: {self.tmp_path}")
+                
+                if attempt < MAX_RETRIES and is_retryable:
                     # Calculate delay for next retry
                     delay = self._calculate_retry_delay(attempt)
-                    logger.info(f"Retrying in {delay:.1f} seconds...")
+                    logger.info(f"Retrying in {delay:.1f} seconds... (retryable error)")
                     
                     with download_lock:
                         download_tasks[self.task_id].update({
@@ -336,17 +343,22 @@ class ModelDownloader:
                     
                     await asyncio.sleep(delay)
                 else:
-                    # Final failure
+                    # Final failure or non-retryable error
+                    final_status = 'error'
+                    if not is_retryable:
+                        final_status = 'failed_permanent'
+                        error_msg = f'Non-retryable error: {error_msg}'
+                    
                     with download_lock:
                         download_tasks[self.task_id] = {
                             'progress': -1,
-                            'status': 'error',
+                            'status': final_status,
                             'url': self.url,
                             'path': self.path,
-                            'message': f'Download failed after {MAX_RETRIES + 1} attempts: {error_msg}',
+                            'message': f'Download failed after {attempt + 1} attempts: {error_msg}',
                             'retry_count': attempt
                         }
-                    logger.error(f"Download failed permanently after {MAX_RETRIES + 1} attempts: {error_msg}")
+                    logger.error(f"Download failed permanently after {attempt + 1} attempts: {error_msg}")
                     print(f"\nDownload failed: {self.path} - {error_msg}")
                     break
 
@@ -379,6 +391,7 @@ def register_model_downloader_routes():
                 model_url = model_data.get('url')
                 model_id = model_data.get('id')
                 model_path = model_data.get('path')
+                force = model_data.get('force', False)  # Default to False for backward compatibility
                 
                 if not model_url or not model_id or not model_path:
                     logger.warning(f"Skipping invalid model data: {model_data}")
@@ -388,11 +401,15 @@ def register_model_downloader_routes():
                         'progress': -1  # Error indicator
                     }
                 
-                # Create downloader to get the correct task_id and check file status
-                downloader = ModelDownloader(model_url, model_path, comfyui_path)
+                # Validate force parameter
+                if not isinstance(force, bool):
+                    force = str(force).lower() in ['true', '1', 'yes']
+                
+                # Create downloader with force parameter
+                downloader = ModelDownloader(model_url, model_path, comfyui_path, force=force)
                 task_id = downloader.task_id
                 
-                # Check if file already exists and is complete
+                # Check if file already exists and handle based on force parameter
                 if os.path.exists(downloader.full_path):
                     actual_size = os.path.getsize(downloader.full_path)
                     
@@ -406,36 +423,52 @@ def register_model_downloader_routes():
                                     
                                     if expected_size > 0 and actual_size == expected_size:
                                         # File is complete
-                                        return {
-                                            'id': model_id,
-                                            'path': model_path,
-                                            'progress': 100
-                                        }
+                                        if force:
+                                            logger.info(f"File exists and is complete, but force=true - re-downloading: {downloader.full_path}")
+                                            os.remove(downloader.full_path)  # Delete existing file
+                                        else:
+                                            return {
+                                                'id': model_id,
+                                                'path': model_path,
+                                                'progress': 100
+                                            }
                                     elif expected_size > 0 and actual_size != expected_size:
                                         logger.info(f"File exists but size mismatch for {model_url}. Expected: {expected_size}, Actual: {actual_size}")
                                         # Continue to re-download
                                     else:
-                                        # Server doesn't provide Content-Length, assume file is complete
+                                        # Server doesn't provide Content-Length
+                                        if force:
+                                            logger.info(f"Server doesn't provide size info (force=true), re-downloading: {downloader.full_path}")
+                                            os.remove(downloader.full_path)
+                                        else:
+                                            return {
+                                                'id': model_id,
+                                                'path': model_path,
+                                                'progress': 100
+                                            }
+                                else:
+                                    # Server error
+                                    if force:
+                                        logger.info(f"Server unreachable (force=true), re-downloading: {downloader.full_path}")
+                                        os.remove(downloader.full_path)
+                                    else:
                                         return {
                                             'id': model_id,
                                             'path': model_path,
                                             'progress': 100
                                         }
-                                else:
-                                    # Server error, but file exists with reasonable size - assume it's complete
-                                    return {
-                                        'id': model_id,
-                                        'path': model_path,
-                                        'progress': 100
-                                    }
                         except Exception as e:
                             logger.warning(f"Could not verify file size for {model_url}: {e}")
-                            # Server verification failed, but file exists with reasonable size - assume it's complete
-                            return {
-                                'id': model_id,
-                                'path': model_path,
-                                'progress': 100
-                            }
+                            # Server verification failed
+                            if force:
+                                logger.info(f"Server verification failed (force=true), re-downloading: {downloader.full_path}")
+                                os.remove(downloader.full_path)
+                            else:
+                                return {
+                                    'id': model_id,
+                                    'path': model_path,
+                                    'progress': 100
+                                }
                     else:
                         # File exists but has 0 size - delete and re-download
                         logger.info(f"File exists but is empty, deleting: {downloader.full_path}")
@@ -443,7 +476,7 @@ def register_model_downloader_routes():
                 
                 # Check if download is already in progress
                 with download_lock:
-                    if task_id in download_tasks:
+                    if task_id in download_tasks and not force:
                         existing_task = download_tasks[task_id]
                         progress = existing_task['progress']
                         if progress == -1:  # Error state
@@ -453,6 +486,10 @@ def register_model_downloader_routes():
                             'path': model_path,
                             'progress': progress
                         }
+                    elif task_id in download_tasks and force:
+                        # If force=true and task exists, reset the task for re-download
+                        logger.info(f"Force download requested for {task_id}, resetting existing task")
+                        del download_tasks[task_id]
                 
                 # File doesn't exist or is incomplete, schedule download
                 asyncio.create_task(downloader.download_with_progress())
@@ -551,6 +588,7 @@ def register_model_downloader_routes():
             data = await request.json()
             url = data.get('url')
             path = data.get('path')
+            force = data.get('force', False)  # Default to False for backward compatibility
             
             if not url or not path:
                 return web.json_response({
@@ -558,12 +596,17 @@ def register_model_downloader_routes():
                     'error': 'Both url and path are required'
                 }, status=400)
             
+            # Validate force parameter
+            if not isinstance(force, bool):
+                force = str(force).lower() in ['true', '1', 'yes']
+            
             # Get ComfyUI path
             home_path = os.path.expanduser("~")
             comfyui_path = os.path.join(home_path, "ComfyUI")
             
             logger.info(f"ComfyUI path: {comfyui_path}")
             logger.info(f"Requested path: {path}")
+            logger.info(f"Force download: {force}")
             
             if not os.path.isdir(comfyui_path):
                 return web.json_response({
@@ -571,21 +614,26 @@ def register_model_downloader_routes():
                     'error': f'ComfyUI directory not found at {comfyui_path}'
                 }, status=500)
             
-            # Create downloader to get the correct task_id (with cleaned path)
-            downloader = ModelDownloader(url, path, comfyui_path)
+            # Create downloader with force parameter
+            downloader = ModelDownloader(url, path, comfyui_path, force=force)
             task_id = downloader.task_id
             
-            # Check if task already exists
+            # Check if task already exists and not forced
             with download_lock:
-                if task_id in download_tasks:
+                if task_id in download_tasks and not force:
                     existing_task = download_tasks[task_id]
                     return web.json_response({
                         'success': True,
                         'task_id': task_id,
                         'progress': existing_task['progress'],
                         'status': existing_task['status'],
-                        'message': existing_task['message']
+                        'message': existing_task['message'],
+                        'force': force
                     })
+                elif task_id in download_tasks and force:
+                    # If force=true and task exists, reset the task for re-download
+                    logger.info(f"Force download requested, resetting existing task: {task_id}")
+                    del download_tasks[task_id]
             
             # Run download in background
             asyncio.create_task(downloader.download_with_progress())
@@ -595,7 +643,8 @@ def register_model_downloader_routes():
                 'task_id': task_id,
                 'message': 'Download started',
                 'progress': 0,
-                'status': 'starting'
+                'status': 'starting',
+                'force': force
             })
             
         except Exception as e:
