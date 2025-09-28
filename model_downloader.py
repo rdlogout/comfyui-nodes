@@ -37,8 +37,8 @@ class ModelDownloader:
         self.task_id = f"{url}:{self.path}"
         self.retry_count = 0
         
-        # Only log essential info, reduce verbosity
-        logger.debug(f"ModelDownloader: {os.path.basename(self.path)} (force={self.force})")
+        # Log download start for visibility
+        logger.info(f"ModelDownloader: {os.path.basename(self.path)} (force={self.force})")
     
     def _calculate_retry_delay(self, attempt: int) -> float:
         """Calculate exponential backoff delay with jitter"""
@@ -119,7 +119,7 @@ class ModelDownloader:
                                 'retry_count': 0
                             }
                         print(f"\nFile already exists: {self.path}")
-                        return
+                        return  # This is correct - skip download if file exists and force=false
                     else:
                         # File exists but has 0 size - delete and re-download
                         logger.info(f"File exists but is empty, deleting: {self.full_path}")
@@ -404,6 +404,8 @@ def register_model_downloader_routes():
                 downloader = ModelDownloader(model_url, model_path, comfyui_path, force=force)
                 task_id = downloader.task_id
                 
+                logger.info(f"Processing model: {os.path.basename(model_path)} (force={force})")
+                
                 # Check if file already exists and handle based on force parameter
                 if os.path.exists(downloader.full_path):
                     actual_size = os.path.getsize(downloader.full_path)
@@ -487,6 +489,7 @@ def register_model_downloader_routes():
                         del download_tasks[task_id]
                 
                 # File doesn't exist or is incomplete, schedule download
+                logger.info(f"Starting download for: {os.path.basename(model_path)}")
                 asyncio.create_task(downloader.download_with_progress())
                 return {
                     'id': model_id,
@@ -518,12 +521,10 @@ def register_model_downloader_routes():
             
             # Display the models list we received
             logger.info(f"📥 Received {len(models_data)} models from API:")
-            for i, model in enumerate(models_data[:10]):  # Show first 10 models
+            for i, model in enumerate(models_data):  # Show ALL models
                 model_name = os.path.basename(model.get('path', 'unknown'))
                 model_id = model.get('id', 'unknown')
                 logger.info(f"   {i+1}. {model_name} (ID: {model_id})")
-            if len(models_data) > 10:
-                logger.info(f"   ... and {len(models_data) - 10} more models")
             
             # Get ComfyUI path
             home_path = os.path.expanduser("~")
@@ -540,6 +541,7 @@ def register_model_downloader_routes():
             
             # Process all models in parallel with shared session
             logger.info(f"Processing {len(models_data)} models...")
+            logger.info("=" * 60)
             
             # Configure session with connection pooling and timeouts
             connector = aiohttp.TCPConnector(
@@ -583,18 +585,21 @@ def register_model_downloader_routes():
                         downloaded_count += 1
                     elif result['progress'] == 0:
                         logger.info(f"⬇️  {model_name}: Queued for download")
+                        skipped_count += 1  # Track queued downloads
                     elif result['progress'] == -1:
                         logger.info(f"❌ {model_name}: Error")
                         error_count += 1
                     else:
                         logger.info(f"⏳ {model_name}: {result['progress']}% complete")
+                        skipped_count += 1  # Track in-progress downloads
             
             # Print summary
             logger.info(f"\n📊 Model Sync Summary:")
             logger.info(f"   ✅ Already downloaded: {downloaded_count}")
-            logger.info(f"   ⬇️  Queued for download: {len(models_data) - downloaded_count - skipped_count - error_count}")
+            logger.info(f"   ⬇️  Queued for download: {skipped_count}")
             logger.info(f"   ❌ Errors: {error_count}")
             logger.info(f"   📋 Total models: {len(models_data)}")
+            logger.info("=" * 60)
             
             return web.json_response({
                 'success': True,
