@@ -79,6 +79,8 @@ class ModelDownloader:
         
     async def download_with_progress(self):
         """Download file with progress tracking, resume capability, and retry logic"""
+        logger.info(f"download_with_progress called for: {self.path}")
+        logger.info(f"download_with_progress details - URL: {self.url}, Full path: {self.full_path}, Force: {self.force}")
         for attempt in range(MAX_RETRIES + 1):
             try:
                 # Initialize or update task in download_tasks
@@ -185,8 +187,10 @@ class ModelDownloader:
                 )
                 timeout = ClientTimeout(total=300, connect=30, sock_read=60)  # Increased timeouts
                 
+                logger.info(f"Making HTTP request to: {self.url}")
                 async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
                     async with session.get(self.url, headers=headers) as response:
+                        logger.info(f"HTTP response received: {response.status} for {self.url}")
                         if response.status not in [200, 206]:  # 206 for partial content
                             raise aiohttp.ClientResponseError(
                                 request_info=response.request_info,
@@ -221,6 +225,7 @@ class ModelDownloader:
                             })
                         
                         print(f"\nDownloading: {self.path}")
+                        logger.info(f"Starting to write data to file: {self.tmp_path}")
                         
                         # Open file in append mode for resume
                         mode = 'ab' if resume_pos > 0 else 'wb'
@@ -401,9 +406,15 @@ def register_model_downloader_routes():
                     force = str(force).lower() in ['true', '1', 'yes']
                 
                 # Create downloader with force parameter
+                logger.info(f"Creating ModelDownloader for: {os.path.basename(model_path)}")
+                logger.info(f"  URL: {model_url}")
+                logger.info(f"  Path: {model_path}")
+                logger.info(f"  Force: {force}")
+                
                 downloader = ModelDownloader(model_url, model_path, comfyui_path, force=force)
                 task_id = downloader.task_id
                 
+                logger.info(f"ModelDownloader created successfully. Task ID: {task_id}")
                 logger.info(f"Processing model: {os.path.basename(model_path)} (force={force})")
                 
                 # Check if file already exists and handle based on force parameter
@@ -490,7 +501,35 @@ def register_model_downloader_routes():
                 
                 # File doesn't exist or is incomplete, schedule download
                 logger.info(f"Starting download for: {os.path.basename(model_path)}")
-                asyncio.create_task(downloader.download_with_progress())
+                
+                # Create the download task with error handling
+                try:
+                    download_task = asyncio.create_task(downloader.download_with_progress())
+                    logger.info(f"Download task created successfully for: {os.path.basename(model_path)}")
+                    
+                    # Add a callback to log if the task fails
+                    def task_done_callback(task):
+                        try:
+                            exception = task.exception()
+                            if exception:
+                                logger.error(f"Download task failed for {os.path.basename(model_path)}: {exception}")
+                            else:
+                                logger.info(f"Download task completed for: {os.path.basename(model_path)}")
+                        except asyncio.CancelledError:
+                            logger.warning(f"Download task was cancelled for: {os.path.basename(model_path)}")
+                        except Exception as e:
+                            logger.error(f"Error in download task callback for {os.path.basename(model_path)}: {e}")
+                    
+                    download_task.add_done_callback(task_done_callback)
+                    
+                except Exception as e:
+                    logger.error(f"Failed to create download task for {os.path.basename(model_path)}: {e}")
+                    return {
+                        'id': model_id,
+                        'path': model_path,
+                        'progress': -1  # Error indicator
+                    }
+                
                 return {
                     'id': model_id,
                     'path': model_path,
