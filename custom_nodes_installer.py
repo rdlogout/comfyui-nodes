@@ -16,6 +16,9 @@ try:
 except ImportError:
     HAS_PKG_RESOURCES = False
 
+# Global dictionary to track installation status of background tasks
+installation_status = {}
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -113,6 +116,15 @@ def install_requirements_threaded(pip_executable, requirements_path, repo_name, 
     try:
         logger.info(f"Installing dependencies for existing node {repo_name} in background...")
         
+        # Initialize status as in progress
+        import time
+        installation_status[node_id] = {
+            'status': 'installing',
+            'repo_name': repo_name,
+            'message': f'Installing dependencies for {repo_name}...',
+            'start_time': time.time()
+        }
+        
         # Critical ComfyUI dependencies that should not be upgraded
         CRITICAL_DEPS = {
             'torch', 'torchvision', 'torchaudio', 'numpy', 'pillow', 'opencv-python',
@@ -162,6 +174,12 @@ def install_requirements_threaded(pip_executable, requirements_path, repo_name, 
         
         if not safe_requirements:
             logger.info(f"No new safe dependencies to install for {repo_name}")
+            installation_status[node_id] = {
+                'status': 'skipped',
+                'repo_name': repo_name,
+                'message': f'➖ No dependencies to install for {repo_name}',
+                'completion_time': time.time()
+            }
             return
         
         logger.info(f"Installing {len(safe_requirements)} safe dependencies for {repo_name}")
@@ -181,6 +199,14 @@ def install_requirements_threaded(pip_executable, requirements_path, repo_name, 
             if result.stdout:
                 logger.debug(f"Install output: {result.stdout}")
             
+            # Update status to success
+            installation_status[node_id] = {
+                'status': 'success',
+                'repo_name': repo_name,
+                'message': f'✅ Dependencies installed successfully for {repo_name}',
+                'completion_time': time.time()
+            }
+            
         finally:
             # Clean up temporary file
             if os.path.exists(temp_requirements_path):
@@ -192,10 +218,44 @@ def install_requirements_threaded(pip_executable, requirements_path, repo_name, 
             logger.error(f"Stdout: {e.stdout}")
         if e.stderr:
             logger.error(f"Stderr: {e.stderr}")
+        
+        # Update status to failed
+        installation_status[node_id] = {
+            'status': 'failed',
+            'repo_name': repo_name,
+            'message': f'❌ Failed to install dependencies for {repo_name}',
+            'error': str(e),
+            'completion_time': time.time()
+        }
+        
     except Exception as e:
         logger.error(f"Unexpected error installing dependencies for {repo_name}: {e}")
+        # Update status to error
+        installation_status[node_id] = {
+            'status': 'error',
+            'repo_name': repo_name,
+            'message': f'❌ Error installing dependencies for {repo_name}',
+            'error': str(e),
+            'completion_time': time.time()
+        }
 
 def register_custom_nodes_routes():
+    @PromptServer.instance.routes.get('/api/installation-status')
+    async def get_installation_status(request):
+        """Get the status of background dependency installations"""
+        try:
+            # Return current installation status
+            return web.json_response({
+                'success': True,
+                'installation_status': installation_status
+            })
+        except Exception as e:
+            logger.error(f"Error getting installation status: {e}")
+            return web.json_response({
+                'success': False,
+                'error': str(e)
+            }, status=500)
+
     @PromptServer.instance.routes.get('/api/sync-nodes')
     @PromptServer.instance.routes.post('/api/sync-nodes')
     async def install_custom_nodes(request):
@@ -209,13 +269,6 @@ def register_custom_nodes_routes():
                     'success': False, 
                     'error': 'Failed to fetch custom nodes data from API'
                 }, status=500)
-
-            # Get ComfyUI paths
-            home_path = os.path.expanduser("~")
-            comfyui_path = os.path.join(home_path, "ComfyUI")
-            custom_nodes_path = os.path.join(comfyui_path, "custom_nodes")
-            venv_path = os.path.join(comfyui_path, "venv")
-            pip_executable = os.path.join(venv_path, "bin", "pip")
 
             if not os.path.isdir(custom_nodes_path):
                 return web.json_response({
