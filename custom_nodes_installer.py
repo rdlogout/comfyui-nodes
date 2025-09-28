@@ -121,7 +121,7 @@ def install_requirements_threaded(pip_executable, requirements_path, repo_name, 
         installation_status[node_id] = {
             'status': 'installing',
             'repo_name': repo_name,
-            'message': f'Installing dependencies for {repo_name}...',
+            'message': f'⏳ Installing dependencies for {repo_name}...',
             'start_time': time.time()
         }
         
@@ -177,7 +177,7 @@ def install_requirements_threaded(pip_executable, requirements_path, repo_name, 
             installation_status[node_id] = {
                 'status': 'skipped',
                 'repo_name': repo_name,
-                'message': f'➖ No dependencies to install for {repo_name}',
+                'message': f'⚠️ Skipped dependency installation for {repo_name} (no safe dependencies)',
                 'completion_time': time.time()
             }
             return
@@ -203,7 +203,7 @@ def install_requirements_threaded(pip_executable, requirements_path, repo_name, 
             installation_status[node_id] = {
                 'status': 'success',
                 'repo_name': repo_name,
-                'message': f'✅ Dependencies installed successfully for {repo_name}',
+                'message': f'✅ Successfully installed dependencies for {repo_name}',
                 'completion_time': time.time()
             }
             
@@ -260,6 +260,13 @@ def register_custom_nodes_routes():
     @PromptServer.instance.routes.post('/api/sync-nodes')
     async def install_custom_nodes(request):
         try:
+            # Get ComfyUI paths
+            home_path = os.path.expanduser("~")
+            comfyui_path = os.path.join(home_path, "ComfyUI")
+            custom_nodes_path = os.path.join(comfyui_path, "custom_nodes")
+            venv_path = os.path.join(comfyui_path, "venv")
+            pip_executable = os.path.join(venv_path, "bin", "pip")
+            
             # Fetch custom nodes data from API
             logger.info("Fetching custom nodes from API...")
             nodes_data = get_data('api/machines/custom_nodes')
