@@ -37,13 +37,8 @@ class ModelDownloader:
         self.task_id = f"{url}:{self.path}"
         self.retry_count = 0
         
-        logger.info(f"ModelDownloader initialized:")
-        logger.info(f"  Original path: {path}")
-        logger.info(f"  Cleaned path: {self.path}")
-        logger.info(f"  ComfyUI path: {comfyui_path}")
-        logger.info(f"  Full path: {self.full_path}")
-        logger.info(f"  Tmp path: {self.tmp_path}")
-        logger.info(f"  Force download: {self.force}")
+        # Only log essential info, reduce verbosity
+        logger.debug(f"ModelDownloader: {os.path.basename(self.path)} (force={self.force})")
     
     def _calculate_retry_delay(self, attempt: int) -> float:
         """Calculate exponential backoff delay with jitter"""
@@ -424,7 +419,7 @@ def register_model_downloader_routes():
                                     if expected_size > 0 and actual_size == expected_size:
                                         # File is complete
                                         if force:
-                                            logger.info(f"File exists and is complete, but force=true - re-downloading: {downloader.full_path}")
+                                            logger.debug(f"File exists and is complete, but force=true - re-downloading: {os.path.basename(downloader.full_path)}")
                                             os.remove(downloader.full_path)  # Delete existing file
                                         else:
                                             return {
@@ -433,12 +428,12 @@ def register_model_downloader_routes():
                                                 'progress': 100
                                             }
                                     elif expected_size > 0 and actual_size != expected_size:
-                                        logger.info(f"File exists but size mismatch for {model_url}. Expected: {expected_size}, Actual: {actual_size}")
+                                        logger.debug(f"File exists but size mismatch for {os.path.basename(model_url)}. Expected: {expected_size}, Actual: {actual_size}")
                                         # Continue to re-download
                                     else:
                                         # Server doesn't provide Content-Length
                                         if force:
-                                            logger.info(f"Server doesn't provide size info (force=true), re-downloading: {downloader.full_path}")
+                                            logger.debug(f"Server doesn't provide size info (force=true), re-downloading: {os.path.basename(downloader.full_path)}")
                                             os.remove(downloader.full_path)
                                         else:
                                             return {
@@ -449,7 +444,7 @@ def register_model_downloader_routes():
                                 else:
                                     # Server error
                                     if force:
-                                        logger.info(f"Server unreachable (force=true), re-downloading: {downloader.full_path}")
+                                        logger.debug(f"Server unreachable (force=true), re-downloading: {os.path.basename(downloader.full_path)}")
                                         os.remove(downloader.full_path)
                                     else:
                                         return {
@@ -458,10 +453,10 @@ def register_model_downloader_routes():
                                             'progress': 100
                                         }
                         except Exception as e:
-                            logger.warning(f"Could not verify file size for {model_url}: {e}")
+                            logger.debug(f"Could not verify file size for {os.path.basename(model_url)}: {e}")
                             # Server verification failed
                             if force:
-                                logger.info(f"Server verification failed (force=true), re-downloading: {downloader.full_path}")
+                                logger.debug(f"Server verification failed (force=true), re-downloading: {os.path.basename(downloader.full_path)}")
                                 os.remove(downloader.full_path)
                             else:
                                 return {
@@ -471,7 +466,7 @@ def register_model_downloader_routes():
                                 }
                     else:
                         # File exists but has 0 size - delete and re-download
-                        logger.info(f"File exists but is empty, deleting: {downloader.full_path}")
+                        logger.debug(f"File exists but is empty, deleting: {os.path.basename(downloader.full_path)}")
                         os.remove(downloader.full_path)
                 
                 # Check if download is already in progress
@@ -488,7 +483,7 @@ def register_model_downloader_routes():
                         }
                     elif task_id in download_tasks and force:
                         # If force=true and task exists, reset the task for re-download
-                        logger.info(f"Force download requested for {task_id}, resetting existing task")
+                        logger.debug(f"Force download requested for {task_id}, resetting existing task")
                         del download_tasks[task_id]
                 
                 # File doesn't exist or is incomplete, schedule download
@@ -521,6 +516,15 @@ def register_model_downloader_routes():
                     'error': 'Failed to fetch models data from API'
                 }, status=500)
             
+            # Display the models list we received
+            logger.info(f"📥 Received {len(models_data)} models from API:")
+            for i, model in enumerate(models_data[:10]):  # Show first 10 models
+                model_name = os.path.basename(model.get('path', 'unknown'))
+                model_id = model.get('id', 'unknown')
+                logger.info(f"   {i+1}. {model_name} (ID: {model_id})")
+            if len(models_data) > 10:
+                logger.info(f"   ... and {len(models_data) - 10} more models")
+            
             # Get ComfyUI path
             home_path = os.path.expanduser("~")
             comfyui_path = os.path.join(home_path, "ComfyUI")
@@ -535,7 +539,7 @@ def register_model_downloader_routes():
             semaphore = asyncio.Semaphore(8)
             
             # Process all models in parallel with shared session
-            logger.info(f"Processing {len(models_data)} models in parallel...")
+            logger.info(f"Processing {len(models_data)} models...")
             
             # Configure session with connection pooling and timeouts
             connector = aiohttp.TCPConnector(
@@ -556,21 +560,52 @@ def register_model_downloader_routes():
             
             # Handle any exceptions that occurred during processing
             final_models_status = []
+            downloaded_count = 0
+            skipped_count = 0
+            error_count = 0
+            
             for i, result in enumerate(models_status):
+                model_name = os.path.basename(models_data[i].get('path', 'unknown'))
+                model_id = models_data[i].get('id', 'unknown')
+                
                 if isinstance(result, Exception):
-                    logger.error(f"Exception processing model {models_data[i]}: {result}")
+                    logger.error(f"❌ {model_name}: Error - {result}")
                     final_models_status.append({
-                        'id': models_data[i].get('id'),
+                        'id': model_id,
                         'path': models_data[i].get('path'),
                         'progress': -1
                     })
+                    error_count += 1
                 else:
                     final_models_status.append(result)
+                    if result['progress'] == 100:
+                        logger.info(f"✅ {model_name}: Already downloaded")
+                        downloaded_count += 1
+                    elif result['progress'] == 0:
+                        logger.info(f"⬇️  {model_name}: Queued for download")
+                    elif result['progress'] == -1:
+                        logger.info(f"❌ {model_name}: Error")
+                        error_count += 1
+                    else:
+                        logger.info(f"⏳ {model_name}: {result['progress']}% complete")
+            
+            # Print summary
+            logger.info(f"\n📊 Model Sync Summary:")
+            logger.info(f"   ✅ Already downloaded: {downloaded_count}")
+            logger.info(f"   ⬇️  Queued for download: {len(models_data) - downloaded_count - skipped_count - error_count}")
+            logger.info(f"   ❌ Errors: {error_count}")
+            logger.info(f"   📋 Total models: {len(models_data)}")
             
             return web.json_response({
                 'success': True,
                 'message': 'Models download status checked and downloads scheduled',
-                'models': final_models_status
+                'models': final_models_status,
+                'summary': {
+                    'total': len(models_data),
+                    'downloaded': downloaded_count,
+                    'queued': len(models_data) - downloaded_count - skipped_count - error_count,
+                    'errors': error_count
+                }
             })
             
         except Exception as e:
@@ -604,9 +639,9 @@ def register_model_downloader_routes():
             home_path = os.path.expanduser("~")
             comfyui_path = os.path.join(home_path, "ComfyUI")
             
-            logger.info(f"ComfyUI path: {comfyui_path}")
-            logger.info(f"Requested path: {path}")
-            logger.info(f"Force download: {force}")
+            logger.debug(f"ComfyUI path: {comfyui_path}")
+            logger.debug(f"Requested path: {path}")
+            logger.debug(f"Force download: {force}")
             
             if not os.path.isdir(comfyui_path):
                 return web.json_response({
@@ -632,11 +667,12 @@ def register_model_downloader_routes():
                     })
                 elif task_id in download_tasks and force:
                     # If force=true and task exists, reset the task for re-download
-                    logger.info(f"Force download requested, resetting existing task: {task_id}")
+                    logger.debug(f"Force download requested, resetting existing task: {task_id}")
                     del download_tasks[task_id]
             
             # Run download in background
             asyncio.create_task(downloader.download_with_progress())
+            logger.debug(f"Started download for {os.path.basename(path)} (force={force})")
             
             return web.json_response({
                 'success': True,
