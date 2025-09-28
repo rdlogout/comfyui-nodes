@@ -82,16 +82,13 @@ def analyze_requirements(requirements_path: str, repo_name: str) -> dict:
                 # Check if package is critical
                 if package_name in CRITICAL_DEPS:
                     if package_name in installed_packages:
-                        skipped_packages.append(f"{package_name} (installed: {installed_packages[package_name]})")
+                        skipped_packages.append(f"{package_name} (installed: {installed_packages[package_name]} - protected from upgrade)")
                     else:
-                        skipped_packages.append(f"{package_name} (critical - not installed)")
+                        # Allow installing critical packages if not already installed
+                        safe_requirements.append(original_line)
                     continue
                 
-                # Check if package is already installed
-                if package_name in installed_packages:
-                    already_installed.append(f"{package_name} ({installed_packages[package_name]})")
-                    continue
-                
+                # For non-critical packages, always allow installation (including updates)
                 safe_requirements.append(original_line)
         
         return {
@@ -144,16 +141,16 @@ def install_requirements_threaded(pip_executable, requirements_path, repo_name, 
                     # Check if package is critical
                     if package_name in CRITICAL_DEPS:
                         if package_name in installed_packages:
-                            skipped_packages.append(f"{package_name} (installed: {installed_packages[package_name]})")
+                            skipped_packages.append(f"{package_name} (installed: {installed_packages[package_name]} - protected from upgrade)")
                         else:
-                            skipped_packages.append(f"{package_name} (not installed, but critical)")
+                            # Allow installing critical packages if not already installed
+                            # This ensures new nodes get their required dependencies
+                            logger.info(f"Allowing installation of critical package {package_name} (not yet installed)")
+                            safe_requirements.append(original_line)
                         continue
                     
-                    # Check if package is already installed with compatible version
-                    if package_name in installed_packages:
-                        logger.info(f"Package {package_name} already installed ({installed_packages[package_name]}), skipping")
-                        continue
-                    
+                    # For non-critical packages, allow installation even if already installed
+                    # This allows for updates of safe dependencies
                     safe_requirements.append(original_line)
         
         except Exception as e:
@@ -175,9 +172,9 @@ def install_requirements_threaded(pip_executable, requirements_path, repo_name, 
             with open(temp_requirements_path, 'w') as f:
                 f.write('\n'.join(safe_requirements))
             
-            # Install with --no-deps to avoid upgrading critical dependencies
+            # Install safe dependencies normally (without --no-deps to allow dependency resolution)
             result = subprocess.run([
-                pip_executable, "install", "--no-deps", "-r", temp_requirements_path
+                pip_executable, "install", "-r", temp_requirements_path
             ], capture_output=True, text=True, check=True)
             
             logger.info(f"Successfully installed safe dependencies for {repo_name}")
