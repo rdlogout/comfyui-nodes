@@ -84,7 +84,7 @@ def register_workflow_run_routes():
             logger.info("Received workflow run request")
             
             # Fetch workflow items from backend
-            workflow_items = await get_data_async('api/machine/workflow-run')
+            workflow_items = await get_data_async('api/machines/workflow-run')
             
             if not workflow_items:
                 logger.error("Failed to fetch workflow items from backend")
