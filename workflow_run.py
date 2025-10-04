@@ -74,6 +74,7 @@ async def process_workflow_items(workflow_items: list) -> Dict[str, Any]:
 def register_workflow_run_routes():
     """Register the workflow run routes with the PromptServer"""
     
+    @PromptServer.instance.routes.get('/api/workflow-run')
     @PromptServer.instance.routes.post('/api/workflow-run')
     async def workflow_run_endpoint(request):
         """
