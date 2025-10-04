@@ -1,5 +1,7 @@
 import os
 import requests
+import aiohttp
+import asyncio
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -43,4 +45,55 @@ def post_data(path, data_to_post):
         return response.json()
     except requests.exceptions.RequestException as e:
         logging.error(f"An error occurred: {e}")
+        return None
+
+# Async versions for better performance with aiohttp
+async def get_data_async(path, base_url=None):
+    """
+    Makes an async GET request to the specified path.
+    """
+    if not MACHINE_ID:
+        logging.error("MACHINE_ID not found in environment variables.")
+        return None
+
+    url = f"{(base_url or BASE_URL)}/{path}"
+    headers = {
+        "x-machine-id": MACHINE_ID
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers) as response:
+                response.raise_for_status()
+                return await response.json()
+    except aiohttp.ClientError as e:
+        logging.error(f"An error occurred during async GET: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
+        return None
+
+async def post_data_async(path, data_to_post, base_url=None):
+    """
+    Makes an async POST request to the specified path with the given data.
+    """
+    if not MACHINE_ID:
+        logging.error("MACHINE_ID not found in environment variables.")
+        return None
+
+    url = f"{(base_url or BASE_URL)}/{path}"
+    headers = {
+        "x-machine-id": MACHINE_ID
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=data_to_post, headers=headers) as response:
+                response.raise_for_status()
+                return await response.json()
+    except aiohttp.ClientError as e:
+        logging.error(f"An error occurred during async POST: {e}")
+        return None
+    except Exception as e:
+        logging.error(f"An unexpected error occurred: {e}")
         return None
