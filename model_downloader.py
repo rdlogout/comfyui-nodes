@@ -9,7 +9,7 @@ from typing import Dict, Optional
 import time
 import sys
 import random
-from .helper.request_function import get_data
+from .helper.request_function import get_data, post_data
 from .comfy_services import get_comfyui_config
 
 # Configure logging
@@ -639,6 +639,7 @@ def register_model_downloader_routes():
             logger.info(f"   ❌ Errors: {error_count}")
             logger.info(f"   📋 Total models: {len(models_data)}")
             logger.info("=" * 60)
+            post_response = post_data('api/machines/models', {'models': final_models_status})
             
             return web.json_response({
                 'success': True,

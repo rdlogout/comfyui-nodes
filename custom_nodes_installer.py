@@ -406,7 +406,7 @@ def register_custom_nodes_routes():
             # Post successful node IDs back to the API
             if successful_node_ids:
                 logger.info(f"Posting {len(successful_node_ids)} successful node IDs back to API...")
-                post_response = post_data('api/machines/custom_nodes', {'node_ids': successful_node_ids})
+                post_response = post_data('api/machines/custom_nodes', {'results': results})
                 if post_response:
                     logger.info("Successfully posted node IDs to API")
                 else:
