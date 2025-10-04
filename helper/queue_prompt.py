@@ -118,7 +118,7 @@ async def notify_backend_success(id: str, prompt_id: str) -> None:
     """
     try:
         logger.info(f"Notifying backend of successful queue for workflow {id}")
-        response = await post_data_async(f"api/workflow-run/{id}/queue", {"prompt_id": prompt_id})
+        response = await post_data_async(f"api/machines/workflow-run/{id}/queue", {"prompt_id": prompt_id})
         
         if response:
             logger.info(f"Successfully notified backend for workflow {id}")
@@ -139,7 +139,7 @@ async def notify_backend_failure(id: str, error: str) -> None:
     """
     try:
         logger.info(f"Notifying backend of failed queue for workflow {id}")
-        response = await post_data_async(f"api/workflow-run/{id}", {"status": "failed", "error": error})
+        response = await post_data_async(f"api/machines/workflow-run/{id}", {"status": "failed", "error": error})
         
         if response:
             logger.info(f"Successfully notified backend of failure for workflow {id}")
