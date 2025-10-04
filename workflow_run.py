@@ -10,9 +10,8 @@ from aiohttp import web
 from server import PromptServer
 
 # Import from existing modules
-from helper.request_function import get_data_async, post_data_async
-from helper.queue_prompt import queue_prompt
-from comfy_services import get_progress
+from .helper.request_function import get_data_async, post_data_async
+from .helper.queue_prompt import queue_prompt
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
