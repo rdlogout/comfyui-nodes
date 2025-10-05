@@ -260,9 +260,10 @@ def register_custom_nodes_routes():
     @PromptServer.instance.routes.post('/api/sync-nodes')
     async def install_custom_nodes(request):
         try:
-            # Get ComfyUI paths
-            home_path = os.path.expanduser("~")
-            comfyui_path = os.path.join(home_path, "ComfyUI")
+            # Get ComfyUI paths from centralized configuration
+            from .comfy_services import get_comfyui_path
+            
+            comfyui_path = get_comfyui_path()
             custom_nodes_path = os.path.join(comfyui_path, "custom_nodes")
             venv_path = os.path.join(comfyui_path, "venv")
             pip_executable = os.path.join(venv_path, "bin", "pip")

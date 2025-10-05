@@ -16,6 +16,7 @@ COMFYUI_HOST = "localhost"
 COMFYUI_PORT = 8188
 COMFYUI_URL = f"http://{COMFYUI_HOST}:{COMFYUI_PORT}"
 COMFYUI_WS_URL = f"ws://{COMFYUI_HOST}:{COMFYUI_PORT}"
+COMFYUI_PATH = os.path.expanduser("~/ComfyUI")  # ComfyUI installation path
 
 # Global progress map to store progress against prompt_id
 progress_map: Dict[str, Dict[str, Any]] = {}
@@ -33,8 +34,13 @@ def get_comfyui_config():
         "host": COMFYUI_HOST,
         "port": COMFYUI_PORT,
         "url": COMFYUI_URL,
-        "ws_url": COMFYUI_WS_URL
+        "ws_url": COMFYUI_WS_URL,
+        "path": COMFYUI_PATH
     }
+
+def get_comfyui_path() -> str:
+    """Get the ComfyUI installation path"""
+    return COMFYUI_PATH
 
 def get_progress(prompt_id: str) -> Optional[Dict[str, Any]]:
     """Get progress for a specific prompt ID"""

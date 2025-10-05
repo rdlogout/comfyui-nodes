@@ -565,9 +565,9 @@ def register_model_downloader_routes():
                 model_id = model.get('id', 'unknown')
                 logger.info(f"   {i+1}. {model_name} (ID: {model_id})")
             
-            # Get ComfyUI path
-            home_path = os.path.expanduser("~")
-            comfyui_path = os.path.join(home_path, "ComfyUI")
+            # Get ComfyUI path from centralized configuration
+            from .comfy_services import get_comfyui_path
+            comfyui_path = get_comfyui_path()
             
             if not os.path.isdir(comfyui_path):
                 return web.json_response({
@@ -680,9 +680,9 @@ def register_model_downloader_routes():
             if not isinstance(force, bool):
                 force = str(force).lower() in ['true', '1', 'yes']
             
-            # Get ComfyUI path
-            home_path = os.path.expanduser("~")
-            comfyui_path = os.path.join(home_path, "ComfyUI")
+            # Get ComfyUI path from centralized configuration
+            from .comfy_services import get_comfyui_path
+            comfyui_path = get_comfyui_path()
             
             logger.debug(f"ComfyUI path: {comfyui_path}")
             logger.debug(f"Requested path: {path}")

@@ -14,7 +14,9 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 REPO_URL = "https://github.com/rdlogout/comfyui-nodes"
-COMFY_DIR = os.path.expanduser("~/ComfyUI")
+from .comfy_services import get_comfyui_path
+
+COMFY_DIR = get_comfyui_path()
 CUSTOM_NODES_DIR = os.path.join(COMFY_DIR, "custom_nodes")
 TARGET_DIR = os.path.join(CUSTOM_NODES_DIR, "comfyui-nodes")
 

@@ -21,7 +21,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Configuration
-COMFYUI_PATH = os.path.expanduser("~/ComfyUI")  # ComfyUI installation path
+from .comfy_services import get_comfyui_path
+
+COMFYUI_PATH = get_comfyui_path()  # ComfyUI installation path
 DOWNLOAD_DIR = os.path.join(COMFYUI_PATH, "input")  # ComfyUI input directory
 MAX_CONCURRENT_DOWNLOADS = 3
 
