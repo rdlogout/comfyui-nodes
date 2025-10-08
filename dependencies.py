@@ -27,7 +27,7 @@ def register_dependencies_routes():
             logger.info("Fetching dependencies from API...")
             
             # Fetch dependencies from API
-            dependencies_data = get_data('api/machine/dependencies')
+            dependencies_data = get_data('api/machines/dependencies')
             
             if not dependencies_data:
                 return web.json_response({

@@ -1,6 +1,6 @@
 requests
-python-dotenv
 psutil
 websocket-client
 aiofiles
 aiohttp
+huggingface_hub

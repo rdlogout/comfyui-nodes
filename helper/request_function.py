@@ -7,18 +7,18 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 BASE_URL = "https://fussion.studio"
-MACHINE_ID = os.environ.get("MACHINE_ID")
 
 def get_data(path):
     """
     Makes a GET request to the specified path.
     """
-    if not MACHINE_ID:
+    machine_id = os.environ.get("MACHINE_ID")
+    if not machine_id:
         logging.error("MACHINE_ID not found in environment variables.")
         return None
 
     headers = {
-        "x-machine-id": MACHINE_ID
+        "x-machine-id": machine_id
     }
     try:
         response = requests.get(f"{BASE_URL}/{path}", headers=headers)
@@ -32,12 +32,13 @@ def post_data(path, data_to_post):
     """
     Makes a POST request to the specified path with the given data.
     """
-    if not MACHINE_ID:
+    machine_id = os.environ.get("MACHINE_ID")
+    if not machine_id:
         logging.error("MACHINE_ID not found in environment variables.")
         return None
 
     headers = {
-        "x-machine-id": MACHINE_ID
+        "x-machine-id": machine_id
     }
     try:
         response = requests.post(f"{BASE_URL}/{path}", json=data_to_post, headers=headers)
@@ -52,13 +53,14 @@ async def get_data_async(path, base_url=None):
     """
     Makes an async GET request to the specified path.
     """
-    if not MACHINE_ID:
+    machine_id = os.environ.get("MACHINE_ID")
+    if not machine_id:
         logging.error("MACHINE_ID not found in environment variables.")
         return None
 
     url = f"{(base_url or BASE_URL)}/{path}"
     headers = {
-        "x-machine-id": MACHINE_ID
+        "x-machine-id": machine_id
     }
     
     try:
@@ -77,13 +79,14 @@ async def post_data_async(path, data_to_post, base_url=None):
     """
     Makes an async POST request to the specified path with the given data.
     """
-    if not MACHINE_ID:
+    machine_id = os.environ.get("MACHINE_ID")
+    if not machine_id:
         logging.error("MACHINE_ID not found in environment variables.")
         return None
 
     url = f"{(base_url or BASE_URL)}/{path}"
     headers = {
-        "x-machine-id": MACHINE_ID
+        "x-machine-id": machine_id
     }
     
     try:
