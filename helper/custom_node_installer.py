@@ -9,6 +9,7 @@ import subprocess
 import json
 import logging
 import threading
+import re
 from typing import Set, Dict, Optional
 
 # Configure logging
@@ -199,6 +200,11 @@ def install_custom_node(node_url):
     """
     Install a custom node from URL with automatic dependency installation
     
+    Supports GitHub URLs with branches:
+    - https://github.com/user/repo
+    - https://github.com/user/repo/tree/branch-name
+    - https://github.com/user/repo.git
+    
     Args:
         node_url (str): Git repository URL for the custom node
         
@@ -217,7 +223,22 @@ def install_custom_node(node_url):
             logger.error('Custom nodes directory not found')
             return None
         
-        repo_name = node_url.split("/")[-1].replace(".git", "")
+        # Parse the URL to extract repository information
+        github_info = parse_github_url(node_url)
+        
+        if github_info:
+            # GitHub URL with branch support
+            repo_name = github_info['repo']
+            clone_url = github_info['clone_url']
+            branch = github_info['branch']
+            logger.info(f"Parsed GitHub URL: {github_info['user']}/{repo_name} (branch: {branch})")
+        else:
+            # Fallback to original parsing for non-GitHub URLs
+            repo_name = node_url.split("/")[-1].replace(".git", "")
+            clone_url = node_url
+            branch = "main"  # Default branch
+            logger.info(f"Using fallback parsing for non-GitHub URL: {repo_name}")
+        
         repo_path = os.path.join(custom_nodes_path, repo_name)
         
         # Check if folder already exists
@@ -242,10 +263,20 @@ def install_custom_node(node_url):
             
             return True
         
-        # Clone the repository
-        logger.info(f"Cloning custom node from {node_url}")
-        subprocess.run(["git", "clone", node_url, repo_path], check=True)
-        logger.info(f"Custom node {repo_name} installed successfully")
+        # Clone the repository with branch support
+        logger.info(f"Cloning custom node from {clone_url} (branch: {branch})")
+        
+        if branch and branch != "main":
+            # Clone specific branch
+            subprocess.run([
+                "git", "clone", "--branch", branch, "--single-branch", 
+                clone_url, repo_path
+            ], check=True)
+            logger.info(f"Custom node {repo_name} (branch: {branch}) installed successfully")
+        else:
+            # Clone default branch
+            subprocess.run(["git", "clone", clone_url, repo_path], check=True)
+            logger.info(f"Custom node {repo_name} installed successfully")
         
         # Check if requirements.txt exists and install dependencies in background
         requirements_path = os.path.join(repo_path, "requirements.txt")
@@ -270,4 +301,53 @@ def install_custom_node(node_url):
         return None
     except Exception as e:
         logger.error(f"Error installing custom node {node_url}: {e}")
+        return None
+
+
+def parse_github_url(url: str) -> Optional[dict]:
+    """
+    Parse GitHub URL to extract repository information and branch.
+    
+    Supports formats:
+    - https://github.com/user/repo
+    - https://github.com/user/repo.git
+    - https://github.com/user/repo/tree/branch-name
+    - https://github.com/user/repo/tree/branch-name/subfolder
+    
+    Args:
+        url: GitHub URL to parse
+        
+    Returns:
+        dict with 'user', 'repo', 'branch', 'subfolder', 'clone_url' or None if not a GitHub URL
+    """
+    try:
+        # Remove trailing slashes and .git extension
+        url = url.rstrip('/')
+        
+        # Pattern for GitHub URLs with optional branch/tree
+        github_pattern = r'https?://github\.com/([^/]+)/([^/]+)(?:/tree/([^/]+)(?:/(.*))?)?(?:\.git)?$'
+        
+        match = re.match(github_pattern, url)
+        if not match:
+            return None
+        
+        user = match.group(1)
+        repo = match.group(2)
+        branch = match.group(3) if match.group(3) else 'main'  # Default to main branch
+        subfolder = match.group(4) if match.group(4) else None
+        
+        # Create clean clone URL
+        clone_url = f"https://github.com/{user}/{repo}.git"
+        
+        return {
+            'user': user,
+            'repo': repo,
+            'branch': branch,
+            'subfolder': subfolder,
+            'clone_url': clone_url,
+            'original_url': url
+        }
+        
+    except Exception as e:
+        logger.error(f"Error parsing GitHub URL {url}: {e}")
         return None

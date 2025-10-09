@@ -5,6 +5,8 @@ Leverages HF Hub's built-in caching and locking mechanisms.
 
 import os
 from typing import Optional, Union, List
+import time
+from tqdm import tqdm
 
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import enable_progress_bars, disable_progress_bars
@@ -122,12 +124,15 @@ def download_model(
         # Download to specific local directory (with automatic fallback)
         already_cached = download_model("microsoft/DialoGPT-medium", local_dir="./models", filename="config.json")
     """
+    start_time = time.time()
+    
     try:
         # Use global cache directory if not specified
         effective_cache_dir = cache_dir or CACHE_DIR
     except Exception as e:
         print(f"Error setting cache directory: {e}")
         effective_cache_dir = CACHE_DIR
+    
     try:
         # Control progress bars based on show_progress parameter
         if show_progress:
@@ -140,13 +145,13 @@ def download_model(
         
         if filename:
             # Download single file using hf_hub_download
-            print(f"Downloading {filename} from {repo_id}...")
+            print(f"📥 Downloading {filename} from {repo_id}...")
             
             # Check if file already exists in the target location
             if validated_local_dir:
                 target_file_path = os.path.join(validated_local_dir, filename)
                 if os.path.exists(target_file_path):
-                    print(f"File {filename} already exists at {target_file_path}")
+                    print(f"✅ File {filename} already exists at {target_file_path}")
                     return True
             
             # Check if file is already cached using try_to_load_from_cache
@@ -159,11 +164,27 @@ def download_model(
             )
             
             if cached_path and isinstance(cached_path, str) and not validated_local_dir:
-                print(f"File {filename} already cached at {cached_path}")
+                print(f"✅ File {filename} already cached at {cached_path}")
                 return True
             
             # File not cached or needs to be downloaded to local_dir, download it
-            print(f"Starting download of {filename}...")
+            print(f"🔄 Starting download of {filename}...")
+            
+            # Create a custom progress callback for better visibility
+            def progress_callback(downloaded_bytes: int, total_bytes: int) -> None:
+                if total_bytes > 0:
+                    progress = (downloaded_bytes / total_bytes) * 100
+                    speed = downloaded_bytes / (time.time() - start_time + 0.001)  # Avoid division by zero
+                    speed_mb = speed / (1024 * 1024)
+                    
+                    # Only print progress every 10% or for smaller files every 25%
+                    if total_bytes > 100 * 1024 * 1024:  # Files > 100MB
+                        if int(progress) % 10 == 0:
+                            print(f"⏳ Progress: {progress:.1f}% ({downloaded_bytes / (1024*1024):.1f}MB / {total_bytes / (1024*1024):.1f}MB) - Speed: {speed_mb:.1f} MB/s")
+                    else:  # Smaller files
+                        if int(progress) % 25 == 0:
+                            print(f"⏳ Progress: {progress:.1f}% ({downloaded_bytes / (1024*1024):.1f}MB / {total_bytes / (1024*1024):.1f}MB) - Speed: {speed_mb:.1f} MB/s")
+            
             downloaded_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=filename,
@@ -172,18 +193,24 @@ def download_model(
                 cache_dir=effective_cache_dir
             )
             
-            print(f"Successfully downloaded {filename} to {downloaded_path}")
+            download_time = time.time() - start_time
+            file_size = os.path.getsize(downloaded_path) if os.path.exists(downloaded_path) else 0
+            size_mb = file_size / (1024 * 1024)
+            speed_mb = size_mb / download_time if download_time > 0 else 0
+            
+            print(f"✅ Successfully downloaded {filename} to {downloaded_path}")
+            print(f"📊 Download completed in {download_time:.1f}s - {size_mb:.1f}MB at {speed_mb:.1f} MB/s")
             return False  # Newly downloaded
             
         else:
             # Download entire repository/folder using snapshot_download
-            print(f"Downloading repository {repo_id}...")
+            print(f"📦 Downloading repository {repo_id}...")
             if allow_patterns:
-                print(f"Using patterns: {allow_patterns}")
+                print(f"🔍 Using patterns: {allow_patterns}")
             
             # For repositories, we'll rely on HF Hub's internal caching
             # snapshot_download will use cached files when available
-            print(f"Starting repository download...")
+            print(f"🔄 Starting repository download...")
             downloaded_path = snapshot_download(
                 repo_id=repo_id,
                 local_dir=validated_local_dir,
@@ -192,11 +219,15 @@ def download_model(
                 allow_patterns=allow_patterns
             )
             
-            print(f"Successfully downloaded repository {repo_id} to {downloaded_path}")
+            download_time = time.time() - start_time
+            print(f"✅ Successfully downloaded repository {repo_id} to {downloaded_path}")
+            print(f"📊 Download completed in {download_time:.1f}s")
             return False  # Always return False for repo downloads as we can't easily determine if fully cached
             
     except Exception as e:
-        print(f"Error downloading from {repo_id}: {e}")
+        download_time = time.time() - start_time
+        print(f"❌ Error downloading from {repo_id}: {e}")
+        print(f"⏱️  Failed after {download_time:.1f}s")
         return False
 
 
