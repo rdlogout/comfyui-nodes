@@ -125,6 +125,9 @@ def download_model(
     try:
         # Use global cache directory if not specified
         effective_cache_dir = cache_dir or CACHE_DIR
+    except Exception as e:
+        print(f"Error setting cache directory: {e}")
+        effective_cache_dir = CACHE_DIR
     try:
         # Control progress bars based on show_progress parameter
         if show_progress:
