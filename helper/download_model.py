@@ -7,13 +7,7 @@ import os
 from typing import Optional, Union, List
 
 from huggingface_hub import hf_hub_download, snapshot_download
-
-# Try to import tqdm for progress bars
-try:
-    from tqdm import tqdm
-    TQDM_AVAILABLE = True
-except ImportError:
-    TQDM_AVAILABLE = False
+from huggingface_hub.utils import enable_progress_bars, disable_progress_bars
 
 # Import ComfyUI path function
 try:
@@ -110,7 +104,7 @@ def download_model(
         allow_patterns: Patterns of files to download (only used when filename is None)
         revision: Git revision (branch, tag, or commit hash, defaults to "main")
         cache_dir: Custom cache directory (defaults to HF_HOME or ~/.cache/huggingface)
-        show_progress: Whether to show download progress bars (requires tqdm)
+        show_progress: Whether to show download progress bars (uses huggingface_hub's built-in progress system)
         
     Returns:
         bool: True if file/repo was already downloaded (cached), False if newly downloaded or failed
@@ -131,8 +125,14 @@ def download_model(
     try:
         # Use global cache directory if not specified
         effective_cache_dir = cache_dir or CACHE_DIR
-        
-        # Validate and get proper local directory
+    try:
+        # Control progress bars based on show_progress parameter
+        if show_progress:
+            enable_progress_bars()
+        else:
+            disable_progress_bars()
+            
+        # Validate and get the local directory
         validated_local_dir = _get_valid_local_dir(local_dir)
         
         if filename:
@@ -166,8 +166,7 @@ def download_model(
                 filename=filename,
                 local_dir=validated_local_dir,
                 revision=revision,
-                cache_dir=effective_cache_dir,
-                tqdm_class=tqdm if (show_progress and TQDM_AVAILABLE) else None
+                cache_dir=effective_cache_dir
             )
             
             print(f"Successfully downloaded {filename} to {downloaded_path}")
@@ -187,8 +186,7 @@ def download_model(
                 local_dir=validated_local_dir,
                 revision=revision,
                 cache_dir=effective_cache_dir,
-                allow_patterns=allow_patterns,
-                tqdm_class=tqdm if (show_progress and TQDM_AVAILABLE) else None
+                allow_patterns=allow_patterns
             )
             
             print(f"Successfully downloaded repository {repo_id} to {downloaded_path}")

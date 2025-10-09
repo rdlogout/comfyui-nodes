@@ -4,4 +4,3 @@ websocket-client
 aiofiles
 aiohttp
 huggingface_hub
-tqdm
