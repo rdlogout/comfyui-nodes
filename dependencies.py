@@ -46,38 +46,79 @@ def register_dependencies_routes():
             # Process each dependency item
             for item in dependencies_data:
                 item_id = item.get('id')
-                custom_node_url = item.get('custom_node_url')
+                item_name = item.get('name')
+                item_type = item.get('type')  # 'model' or 'custom_node'
+                item_url = item.get('url')
                 model_repo_id = item.get('model_repo_id')
-                model_filename = item.get('model_filename')
-                model_is_directory = item.get('model_is_directory', False)
+                model_type = item.get('model_type')  # 'file', 'folder', or 'repo'
                 model_local_dir = item.get('model_local_dir')
+                model_allow_patterns = item.get('model_allow_patterns')
+                
+                # Validate required fields
+                if not item_type:
+                    logger.warning(f"Skipping dependency {item_id}: missing 'type' field")
+                    continue
+                    
+                if item_type not in ['model', 'custom_node']:
+                    logger.warning(f"Skipping dependency {item_id}: invalid type '{item_type}'. Must be 'model' or 'custom_node'")
+                    continue
 
                 
-                if custom_node_url:
-                    result = install_custom_node(custom_node_url)
+                if item_type == 'custom_node':
+                    if not item_url:
+                        logger.warning(f"Skipping custom_node dependency {item_id}: missing 'url' field")
+                        results.append({
+                            'id': item_id,
+                            'msg': f'Failed to install custom node {item_name or item_id}: missing URL'
+                        })
+                        continue
+                        
+                    result = install_custom_node(item_url)
                     if result is False:
                         results.append({
                             'id': item_id,
-                            'msg': f'Failed to install custom node: {custom_node_url}'
+                            'msg': f'Failed to install custom node: {item_name or item_url}'
                         })
                 
-                if model_repo_id:
+                elif item_type == 'model':
+                    if not model_repo_id:
+                        logger.warning(f"Skipping model dependency {item_id}: missing 'model_repo_id' field")
+                        results.append({
+                            'id': item_id,
+                            'msg': f'Failed to download model {item_name or item_id}: missing repository ID'
+                        })
+                        continue
+                        
+                    if model_type and model_type not in ['file', 'folder', 'repo']:
+                        logger.warning(f"Invalid model_type '{model_type}' for dependency {item_id}. Using default behavior.")
+                        model_type = None
                     # Determine download parameters based on model configuration
                     download_params = {
                         'repo_id': model_repo_id,
                         'local_dir': model_local_dir
                     }
                     
-                    # Add filename if specified and not downloading directory
-                    if model_filename and not model_is_directory:
-                        download_params['filename'] = model_filename
+                    # Handle different model types
+                    if model_type == 'file' and item_name:
+                        # For single file downloads
+                        download_params['filename'] = item_name
+                    elif model_type == 'folder':
+                        # For folder downloads, don't specify filename
+                        pass
+                    elif model_type == 'repo':
+                        # For full repository downloads
+                        pass
+                    
+                    # Add allow patterns if specified
+                    if model_allow_patterns:
+                        download_params['allow_patterns'] = model_allow_patterns.split(',') if isinstance(model_allow_patterns, str) else model_allow_patterns
                     
                     # Call download_model function
                     already_cached = download_model(**download_params)
                     
                     # Add to results if newly downloaded (not cached)
                     if not already_cached:
-                        model_name = model_filename if model_filename else model_repo_id
+                        model_name = item_name if item_name else model_repo_id
                         results.append({
                             'id': item_id,
                             'msg': f'Downloaded model: {model_name}'
