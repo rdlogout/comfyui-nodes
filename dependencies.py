@@ -4,9 +4,11 @@ Handles dependency management by fetching from API and installing custom nodes
 """
 
 import logging
+import asyncio
+import threading
 from aiohttp import web
 from server import PromptServer
-from .helper.request_function import get_data
+from .helper.request_function import get_data, post_data
 from .helper.custom_node_installer import install_custom_node
 from .helper.download_model import download_model
 
@@ -14,33 +16,13 @@ from .helper.download_model import download_model
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-def register_dependencies_routes():
-    """Register the dependencies routes with PromptServer"""
-    
-    @PromptServer.instance.routes.get('/api/dependencies')
-    async def dependencies_endpoint(request):
-        """
-        GET /api/dependencies
-        Fetch dependencies from API and install custom nodes
-        """
+def process_dependencies_background(dependencies_data):
+    """
+    Process dependencies in background and post results when complete
+    """
+    def run_processing():
         try:
-            logger.info("Fetching dependencies from API...")
-            
-            # Fetch dependencies from API
-            dependencies_data = get_data('api/machines/dependencies')
-            
-            if not dependencies_data:
-                return web.json_response({
-                    'success': False,
-                    'error': 'Failed to fetch dependencies from API'
-                }, status=500)
-            
-            if not isinstance(dependencies_data, list):
-                return web.json_response({
-                    'success': False,
-                    'error': 'Invalid dependencies data format'
-                }, status=500)
-            
+            logger.info("Starting background dependency processing...")
             results = []
             
             # Process each dependency item
@@ -79,6 +61,11 @@ def register_dependencies_routes():
                             'id': item_id,
                             'msg': f'Failed to install custom node: {item_name or item_url}'
                         })
+                    else:
+                        results.append({
+                            'id': item_id,
+                            'msg': f'Successfully installed custom node: {item_name or item_url}'
+                        })
                 
                 elif item_type == 'model':
                     if not model_repo_id:
@@ -92,6 +79,7 @@ def register_dependencies_routes():
                     if model_type and model_type not in ['file', 'folder', 'repo']:
                         logger.warning(f"Invalid model_type '{model_type}' for dependency {item_id}. Using default behavior.")
                         model_type = None
+                        
                     # Determine download parameters based on model configuration
                     download_params = {
                         'repo_id': model_repo_id,
@@ -114,19 +102,86 @@ def register_dependencies_routes():
                         download_params['allow_patterns'] = model_allow_patterns.split(',') if isinstance(model_allow_patterns, str) else model_allow_patterns
                     
                     # Call download_model function
-                    already_cached = download_model(**download_params)
-                    
-                    # Add to results if newly downloaded (not cached)
-                    if not already_cached:
+                    try:
+                        already_cached = download_model(**download_params)
                         model_name = item_name if item_name else model_repo_id
+                        
+                        if already_cached:
+                            results.append({
+                                'id': item_id,
+                                'msg': f'Model already cached: {model_name}'
+                            })
+                        else:
+                            results.append({
+                                'id': item_id,
+                                'msg': f'Downloaded model: {model_name}'
+                            })
+                    except Exception as e:
+                        logger.error(f"Error downloading model {model_repo_id}: {e}")
                         results.append({
                             'id': item_id,
-                            'msg': f'Downloaded model: {model_name}'
+                            'msg': f'Failed to download model {item_name or model_repo_id}: {str(e)}'
                         })
             
+            # Post results back to API
+            logger.info(f"Posting {len(results)} dependency results to API...")
+            api_response = post_data('api/machines/dependencies', {'results': results})
+            
+            if api_response:
+                logger.info("Successfully posted dependency results to API")
+            else:
+                logger.error("Failed to post dependency results to API")
+                
+        except Exception as e:
+            logger.error(f"Error in background dependency processing: {str(e)}")
+    
+    # Start processing in background thread
+    thread = threading.Thread(target=run_processing, daemon=True)
+    thread.start()
+    logger.info("Background dependency processing started")
+
+def register_dependencies_routes():
+    """Register the dependencies routes with PromptServer"""
+    
+    @PromptServer.instance.routes.get('/api/dependencies')
+    async def dependencies_endpoint(request):
+        """
+        GET /api/dependencies
+        Fetch dependencies from API and start background processing
+        """
+        try:
+            logger.info("Fetching dependencies from API...")
+            
+            # Fetch dependencies from API
+            dependencies_data = get_data('api/machines/dependencies')
+            
+            if not dependencies_data:
+                return web.json_response({
+                    'success': False,
+                    'error': 'Failed to fetch dependencies from API'
+                }, status=500)
+            
+            if not isinstance(dependencies_data, list):
+                return web.json_response({
+                    'success': False,
+                    'error': 'Invalid dependencies data format'
+                }, status=500)
+            
+            # Check if there are any dependencies to process
+            if not dependencies_data or len(dependencies_data) == 0:
+                return web.json_response({
+                    'status': 'no_dependencies',
+                    'message': 'No dependencies to process'
+                })
+            
+            # Start background processing
+            process_dependencies_background(dependencies_data)
+            
+            # Return immediately with status
             return web.json_response({
-                'success': True,
-                'results': results
+                'status': 'processing',
+                'message': f'Started processing {len(dependencies_data)} dependencies in background',
+                'count': len(dependencies_data)
             })
             
         except Exception as e:
